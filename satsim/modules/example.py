@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import matplotlib.pyplot as plt
 import numpy as np
-from architecture.simulation_module import SimulationModule
+from satsim.architecture.module import SimulationModule
 from architecture.simulator import Simulator
 
 
@@ -17,18 +17,25 @@ class SpringDamperOscillator(SimulationModule):
     x2' = (F(t) - c*x2 - k*x1) / m
     """
 
-    def __init__(self, name: str = "SpringDamper", mass: float = 1.0,
-                 spring_constant: float = 10.0, damping_coefficient: float = 0.5,
-                 initial_position: float = 1.0, initial_velocity: float = 0.0):
+    def __init__(self,
+                 name: str = "SpringDamper",
+                 mass: float = 1.0,
+                 spring_constant: float = 10.0,
+                 damping_coefficient: float = 0.5,
+                 initial_position: float = 1.0,
+                 initial_velocity: float = 0.0):
         super().__init__(name)
 
         # 系统参数
         self.mass = torch.tensor(mass, dtype=torch.float32)
-        self.spring_constant = torch.tensor(spring_constant, dtype=torch.float32)
-        self.damping_coefficient = torch.tensor(damping_coefficient, dtype=torch.float32)
+        self.spring_constant = torch.tensor(spring_constant,
+                                            dtype=torch.float32)
+        self.damping_coefficient = torch.tensor(damping_coefficient,
+                                                dtype=torch.float32)
 
         # 初始状态
-        self.initial_state = torch.tensor([initial_position, initial_velocity], dtype=torch.float32)
+        self.initial_state = torch.tensor([initial_position, initial_velocity],
+                                          dtype=torch.float32)
 
         # 状态变量 [位置, 速度]
         self.state = nn.Parameter(self.initial_state.clone())
@@ -61,19 +68,22 @@ class SpringDamperOscillator(SimulationModule):
             # dx/dt = v
             # dv/dt = (F - c*v - k*x) / m
             dx_dt = v
-            dv_dt = (F - self.damping_coefficient * v - self.spring_constant * x) / self.mass
+            dv_dt = (F - self.damping_coefficient * v -
+                     self.spring_constant * x) / self.mass
 
             return torch.stack([dx_dt, dv_dt])
 
         # RK4积分
         k1 = derivatives(self.state, self.current_time)
-        k2 = derivatives(self.state + 0.5 * dt_tensor * k1, self.current_time + 0.5 * dt)
-        k3 = derivatives(self.state + 0.5 * dt_tensor * k2, self.current_time + 0.5 * dt)
+        k2 = derivatives(self.state + 0.5 * dt_tensor * k1,
+                         self.current_time + 0.5 * dt)
+        k3 = derivatives(self.state + 0.5 * dt_tensor * k2,
+                         self.current_time + 0.5 * dt)
         k4 = derivatives(self.state + dt_tensor * k3, self.current_time + dt)
 
         # 更新状态
         with torch.no_grad():
-            self.state.data += dt_tensor * (k1 + 2*k2 + 2*k3 + k4) / 6
+            self.state.data += dt_tensor * (k1 + 2 * k2 + 2 * k3 + k4) / 6
 
         # 更新时间
         self.current_time += dt
@@ -114,7 +124,12 @@ class SpringDamperOscillator(SimulationModule):
     def load_simulation_state(self, state):
         """载入完整的仿真状态"""
         self.current_time = state.pop('current_time', 0.0)
-        self.history = state.pop('history', {'time': [], 'position': [], 'velocity': [], 'energy': []})
+        self.history = state.pop('history', {
+            'time': [],
+            'position': [],
+            'velocity': [],
+            'energy': []
+        })
         super().load_simulation_state(state)
 
     def plot_results(self):
@@ -126,7 +141,11 @@ class SpringDamperOscillator(SimulationModule):
         fig, axes = plt.subplots(2, 2, figsize=(12, 8))
 
         # 位置vs时间
-        axes[0, 0].plot(self.history['time'], self.history['position'], 'b-', linewidth=2, label='Position')
+        axes[0, 0].plot(self.history['time'],
+                        self.history['position'],
+                        'b-',
+                        linewidth=2,
+                        label='Position')
         axes[0, 0].set_xlabel('Time (s)')
         axes[0, 0].set_ylabel('Position (m)')
         axes[0, 0].set_title('Position vs Time')
@@ -134,7 +153,11 @@ class SpringDamperOscillator(SimulationModule):
         axes[0, 0].legend()
 
         # 速度vs时间
-        axes[0, 1].plot(self.history['time'], self.history['velocity'], 'r-', linewidth=2, label='Velocity')
+        axes[0, 1].plot(self.history['time'],
+                        self.history['velocity'],
+                        'r-',
+                        linewidth=2,
+                        label='Velocity')
         axes[0, 1].set_xlabel('Time (s)')
         axes[0, 1].set_ylabel('Velocity (m/s)')
         axes[0, 1].set_title('Velocity vs Time')
@@ -142,14 +165,22 @@ class SpringDamperOscillator(SimulationModule):
         axes[0, 1].legend()
 
         # 相空间图 (位置vs速度)
-        axes[1, 0].plot(self.history['position'], self.history['velocity'], 'g-', linewidth=2, alpha=0.7)
+        axes[1, 0].plot(self.history['position'],
+                        self.history['velocity'],
+                        'g-',
+                        linewidth=2,
+                        alpha=0.7)
         axes[1, 0].set_xlabel('Position (m)')
         axes[1, 0].set_ylabel('Velocity (m/s)')
         axes[1, 0].set_title('Phase Space (Position vs Velocity)')
         axes[1, 0].grid(True)
 
         # 能量vs时间
-        axes[1, 1].plot(self.history['time'], self.history['energy'], 'm-', linewidth=2, label='Total Energy')
+        axes[1, 1].plot(self.history['time'],
+                        self.history['energy'],
+                        'm-',
+                        linewidth=2,
+                        label='Total Energy')
         axes[1, 1].set_xlabel('Time (s)')
         axes[1, 1].set_ylabel('Energy (J)')
         axes[1, 1].set_title('Energy vs Time')
@@ -165,14 +196,12 @@ def main():
     print("=== 弹簧阻尼振子仿真测试 ===")
 
     # 创建弹簧阻尼振子系统
-    oscillator = SpringDamperOscillator(
-        name="TestOscillator",
-        mass=1.0,
-        spring_constant=10.0,
-        damping_coefficient=0.5,
-        initial_position=1.0,
-        initial_velocity=0.0
-    )
+    oscillator = SpringDamperOscillator(name="TestOscillator",
+                                        mass=1.0,
+                                        spring_constant=10.0,
+                                        damping_coefficient=0.5,
+                                        initial_position=1.0,
+                                        initial_velocity=0.0)
 
     # 创建仿真器，关闭自动保存以减少输出
     simulator = Simulator(
@@ -212,12 +241,14 @@ def main():
     # 继续运行几步
     print("继续运行100步...")
     simulator.run(steps=100)
-    print(f"当前状态: step {simulator.steps}, 位置: {oscillator.state[0].item():.4f}")
+    print(
+        f"当前状态: step {simulator.steps}, 位置: {oscillator.state[0].item():.4f}")
 
     # 加载之前的状态
     print(f"加载状态: step {current_step}")
     simulator.load_checkpoint(current_step)
-    print(f"加载后状态: step {simulator.steps}, 位置: {oscillator.state[0].item():.4f}")
+    print(
+        f"加载后状态: step {simulator.steps}, 位置: {oscillator.state[0].item():.4f}")
 
     # 测试重置功能
     print("\n=== 测试重置功能 ===")
