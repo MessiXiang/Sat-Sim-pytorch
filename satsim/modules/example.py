@@ -57,9 +57,9 @@ class SpringDamperOscillator(SimulationModule):
         t_tensor = torch.tensor(t, dtype=torch.float32)
         return 0.5 * torch.sin(2 * torch.pi * 0.5 * t_tensor)
 
-    def simulation_step(self, dt: float) -> torch.Tensor:
+    def simulation_step(self, dt: torch.Tensor) -> torch.Tensor:
         """使用Runge-Kutta 4阶方法求解微分方程"""
-        dt_tensor = torch.tensor(dt, dtype=torch.float32)
+        dt_tensor = dt
 
         def derivatives(state, t_val):
             x, v = state[0], state[1]
