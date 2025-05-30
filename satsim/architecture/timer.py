@@ -1,3 +1,6 @@
+from tqdm import TqdmExperimentalWarning
+
+
 class Timer:
 
     def __init__(
@@ -26,3 +29,6 @@ class Timer:
 
     def reset(self) -> None:
         self.step_count = 0
+
+    def set_step_count(self, step_count: int) -> None:
+        self.step_count = step_count
