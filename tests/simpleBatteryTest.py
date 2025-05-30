@@ -1,6 +1,7 @@
 import torch
-from modules.simpleBattery import SimpleBattery
+from satsim.modules.simulation.power.simpleBattery import SimpleBattery
 from architecture.simulator import Simulator
+
 
 def test_battery_initialization():
     """测试电池初始化"""
@@ -28,6 +29,7 @@ def test_battery_initialization():
     except ValueError as e:
         print("✓ 零容量异常测试通过")
 
+
 def test_basic_charging():
     """测试基本充电功能"""
     print("\n=== 测试基本充电功能 ===")
@@ -45,6 +47,7 @@ def test_basic_charging():
     assert abs(result.item() - 25.0) < 1e-6
     print(f"✓ 继续充电后电量: {result.item()}")
 
+
 def test_basic_discharging():
     """测试基本放电功能"""
     print("\n=== 测试基本放电功能 ===")
@@ -59,6 +62,7 @@ def test_basic_discharging():
     result = battery.simulation_step(dt, power_input=torch.tensor(-20.0))
     assert abs(result.item() - 30.0) < 1e-6
     print(f"✓ 放电后电量: {result.item()}")
+
 
 def test_capacity_limits():
     """测试容量限制"""
@@ -77,6 +81,7 @@ def test_capacity_limits():
     assert abs(result.item() - 0.0) < 1e-6
     print(f"✓ 过度放电后电量被限制在: {result.item()}")
 
+
 def test_fault_conditions():
     """测试故障条件"""
     print("\n=== 测试故障条件 ===")
@@ -89,7 +94,9 @@ def test_fault_conditions():
     print(f"正常状态下充满电量: {battery.stored_charge.item()}")
 
     # 50%故障状态下的有效容量
-    result = battery.simulation_step(dt, power_input=torch.tensor(0.0), fault_ratio=torch.tensor(0.5))
+    result = battery.simulation_step(dt,
+                                     power_input=torch.tensor(0.0),
+                                     fault_ratio=torch.tensor(0.5))
     assert abs(result.item() - 50.0) < 1e-6
     print(f"✓ 50%故障后有效电量: {result.item()}")
 
@@ -106,6 +113,7 @@ def test_fault_conditions():
     except ValueError:
         print("✓ 故障比例<0.0异常测试通过")
 
+
 def test_reset_functionality():
     """测试重置功能"""
     print("\n=== 测试重置功能 ===")
@@ -114,15 +122,22 @@ def test_reset_functionality():
     dt = torch.tensor(1.0)
 
     # 改变电池状态
-    battery.simulation_step(dt, power_input=torch.tensor(50.0), fault_ratio=torch.tensor(0.7))
-    print(f"重置前 - 电量: {battery.stored_charge.item()}, 故障比例: {battery.fault_capacity_ratio.item()}")
+    battery.simulation_step(dt,
+                            power_input=torch.tensor(50.0),
+                            fault_ratio=torch.tensor(0.7))
+    print(
+        f"重置前 - 电量: {battery.stored_charge.item()}, 故障比例: {battery.fault_capacity_ratio.item()}"
+    )
 
     # 重置
     battery.reset_simulation_state()
     assert abs(battery.stored_charge.item() - 0.0) < 1e-6
     assert abs(battery.fault_capacity_ratio.item() - 1.0) < 1e-6
     assert abs(battery.current_power.item() - 0.0) < 1e-6
-    print(f"✓ 重置后 - 电量: {battery.stored_charge.item()}, 故障比例: {battery.fault_capacity_ratio.item()}")
+    print(
+        f"✓ 重置后 - 电量: {battery.stored_charge.item()}, 故障比例: {battery.fault_capacity_ratio.item()}"
+    )
+
 
 def test_with_simulator():
     """测试与仿真器的集成"""
@@ -136,12 +151,14 @@ def test_with_simulator():
     for i in range(10):
         # 模拟周期性充电/放电
         power = torch.tensor(5.0) if i % 2 == 0 else torch.tensor(-2.0)
-        result = simulator.module.simulation_step(simulator.dt, power_input=power)
+        result = simulator.module.simulation_step(simulator.dt,
+                                                  power_input=power)
         simulator.clock.step()
         if i % 3 == 0:
             print(f"步骤 {i+1}: 功率={power.item()}, 电量={result.item():.2f}")
 
     print(f"✓ 仿真完成，最终时间: {simulator.time:.2f}s, 步数: {simulator.steps}")
+
 
 def test_state_management():
     """测试状态管理"""
@@ -151,7 +168,9 @@ def test_state_management():
     dt = torch.tensor(1.0)
 
     # 设置特定状态
-    battery.simulation_step(dt, power_input=torch.tensor(30.0), fault_ratio=torch.tensor(0.8))
+    battery.simulation_step(dt,
+                            power_input=torch.tensor(30.0),
+                            fault_ratio=torch.tensor(0.8))
     original_charge = battery.stored_charge.item()
     original_fault = battery.fault_capacity_ratio.item()
 
@@ -160,13 +179,20 @@ def test_state_management():
     print(f"保存状态 - 电量: {original_charge}, 故障比例: {original_fault}")
 
     # 改变状态
-    battery.simulation_step(dt, power_input=torch.tensor(20.0), fault_ratio=torch.tensor(0.6))
-    print(f"改变后 - 电量: {battery.stored_charge.item()}, 故障比例: {battery.fault_capacity_ratio.item()}")
+    battery.simulation_step(dt,
+                            power_input=torch.tensor(20.0),
+                            fault_ratio=torch.tensor(0.6))
+    print(
+        f"改变后 - 电量: {battery.stored_charge.item()}, 故障比例: {battery.fault_capacity_ratio.item()}"
+    )
 
     # 恢复状态
     battery.load_simulation_state(state)
     assert abs(battery.stored_charge.item() - original_charge) < 1e-6
-    print(f"✓ 恢复状态 - 电量: {battery.stored_charge.item()}, 故障比例: {battery.fault_capacity_ratio.item()}")
+    print(
+        f"✓ 恢复状态 - 电量: {battery.stored_charge.item()}, 故障比例: {battery.fault_capacity_ratio.item()}"
+    )
+
 
 def test_edge_cases():
     """测试边界情况"""
