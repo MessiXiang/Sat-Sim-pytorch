@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from torch import Tensor
 from typing import Dict, Any, Optional
 from abc import ABC, abstractmethod
 
@@ -10,11 +11,11 @@ class SimulationModule(nn.Module, ABC):
         self.name = name
 
     @abstractmethod
-    def simulation_step(self, dt: float) -> torch.Tensor:
+    def simulation_step(self, dt: Tensor, *args, **kwargs) -> Tensor:
         pass
 
-    def forward(self, dt: float) -> torch.Tensor:
-        return self.simulation_step(dt)
+    def forward(self, dt: Tensor, *args, **kwargs) -> Tensor:
+        return self.simulation_step(dt, *args, **kwargs)
 
     def get_simulation_state(self) -> Dict[str, Any]:
         return self.state_dict()

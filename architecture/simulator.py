@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from torch import Tensor
 from typing import Dict, Any, Optional
 from abc import ABC, abstractmethod
 from .simulation_clock import SimulationClock
@@ -53,5 +54,5 @@ class Simulator:
         return self.clock.steps
 
     @property
-    def dt(self) -> float:
+    def dt(self) -> Tensor:
         return self.clock.dt
