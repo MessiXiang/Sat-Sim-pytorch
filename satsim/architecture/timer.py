@@ -1,4 +1,9 @@
-from tqdm import TqdmExperimentalWarning
+from typing import TypedDict
+
+
+# TODO: add timer state dict
+class TimerStateDict(TypedDict):
+    step_count: int
 
 
 class Timer:
@@ -8,27 +13,34 @@ class Timer:
         dt: float = 0.01,
         start_time: float = 0.0,
     ) -> None:
-        self._dt: float = dt
-        self._start_time: float = start_time
-        self._step_count: int = 0
+        self.dt = dt
+        self._start_time = start_time
 
     @property
     def step_count(self) -> int:
-        return self.step_count
+        return self._step_count
 
     @property
     def dt(self) -> float:
         return self._dt
 
+    @dt.setter
+    def dt(self, value: float) -> None:
+        assert value > 0, "dt must be a float superior than 0"
+        self._dt = value
+
     @property
     def time(self) -> float:
-        return self._start_time + self.step_count * self._dt
+        return self._start_time + self._step_count * self._dt
 
     def step(self) -> None:
-        self.step_count += 1
+        self._step_count += 1
 
     def reset(self) -> None:
-        self.step_count = 0
+        self._step_count = 0
 
-    def set_step_count(self, step_count: int) -> None:
-        self.step_count = step_count
+    def state_dict(self) -> TimerStateDict:
+        return dict(step_count=self._step_count)
+
+    def load_state_dict(self, state_dict: TimerStateDict) -> None:
+        self._step_count = state_dict["step_count"]
