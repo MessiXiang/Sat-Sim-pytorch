@@ -69,12 +69,13 @@ class UnifiedEncoderFunction(torch.autograd.Function):
         size = cupy_wheel_speeds.size
         block_sum = 128
 
+        print(clicks_per_radian)
         cupy_encoder_kernel(
             (block_sum, ), ((size + block_sum - 1) // block_sum, ),
             (cupy_wheel_speeds, cupy_remaining_clicks, cupy_rw_signal_state,
              cupy_converted, cupy_new_output, cupy_new_remaining_clicks,
-             clicks_per_radian, dt, size, encoder_signal.NOMINAL,
-             encoder_signal.OFF, encoder_signal.STUCK))
+             cupy.float32(clicks_per_radian), cupy.float32(dt),
+             cupy.int32(size)))
 
         torch_new_output = torch.from_dlpack(cupy_new_output).cpu()
         torch_new_remaining_clicks = torch.from_dlpack(
