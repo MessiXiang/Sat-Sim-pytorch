@@ -3,9 +3,10 @@ from functools import partial
 import pytest
 import torch
 
-from satsim.simulation import Encoder, EncoderState
-from satsim.architecture import (Timer, SIGNAL_OFF, SIGNAL_NOMINAL,
-                                 SIGNAL_STUCK)
+from satsim.architecture import Timer
+from satsim.simulation.deviceInterface.encoder_cupy import (Encoder,
+                                                            EncoderState,
+                                                            encoder_signal)
 
 
 def _run_one_step(state: EncoderState,
@@ -72,13 +73,13 @@ def test_encoder(accuracy: float, timer: Timer, encoder,
                          input_tensor=input_tensor,
                          true_tensor=trueWheelSpeedsEncoded[2])
 
-    state['rw_signal_state'].fill_(SIGNAL_OFF)
+    state['rw_signal_state'].fill_(encoder_signal.OFF)
 
     state = run_one_step(state=state,
                          input_tensor=input_tensor,
                          true_tensor=trueWheelSpeedsEncoded[3])
 
-    state['rw_signal_state'].fill_(SIGNAL_NOMINAL)
+    state['rw_signal_state'].fill_(encoder_signal.NOMINAL)
     input_tensor = torch.tensor([500, 400, 300],
                                 dtype=torch.float32,
                                 requires_grad=True)
@@ -87,7 +88,7 @@ def test_encoder(accuracy: float, timer: Timer, encoder,
                          input_tensor=input_tensor,
                          true_tensor=trueWheelSpeedsEncoded[4])
 
-    state['rw_signal_state'].fill_(SIGNAL_STUCK)
+    state['rw_signal_state'].fill_(encoder_signal.STUCK)
     input_tensor = torch.tensor([100, 200, 300],
                                 dtype=torch.float32,
                                 requires_grad=True)
@@ -143,7 +144,7 @@ def test_requires_grad_propagation(encoder: Encoder, timer: Timer,
                                    state: EncoderState) -> None:
     timer.step()
     wheel_speeds = torch.tensor([1.0, 2.0, 3.0], requires_grad=True)
-    state['rw_signal_state'].fill_(SIGNAL_NOMINAL)
+    state['rw_signal_state'].fill_(encoder_signal.NOMINAL)
     state, (result, ) = encoder(state, wheel_speeds=wheel_speeds)
     result.sum().backward()
     print(wheel_speeds.grad)

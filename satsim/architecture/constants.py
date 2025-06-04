@@ -9,7 +9,7 @@ SEC2NANO = 1e9
 # RECAST6X6 = (double (*)[6])
 # RECAST3X3       (double (*)[3])
 # RECAST2x2       (double (*)[2])
-SEC2HOUR = 1./3600.
+SEC2HOUR = 1. / 3600.
 
 EPOCH_YEAR = 2019
 EPOCH_MONTH = 1
@@ -17,7 +17,3 @@ EPOCH_DAY = 1
 EPOCH_HOUR = 00
 EPOCH_MIN = 00
 EPOCH_SEC = 0.00
-
-SIGNAL_NOMINAL = 0
-SIGNAL_OFF = 1
-SIGNAL_STUCK = 2

@@ -1,79 +1,97 @@
-__all__ = ['Encoder']
-from tkinter import NO
+__all__ = [
+    'Encoder',
+    'encoder_signal',
+    'EncoderState',
+]
 from typing import Any, TypedDict, cast
+from enum import Enum
 import torch
 import cupy
+import pathlib
 
-from ...architecture import (
-    SIGNAL_NOMINAL,
-    SIGNAL_OFF,
-    SIGNAL_STUCK,
+from satsim.architecture import (
     Module,
     Timer,
 )
 
-# Define CuPy kernel for SIGNAL_NOMINAL forward computation
-cupy_nominal_kernel_fwd = cupy.RawKernel(
-    r"""
-extern "C" __global__
-void cupy_nominal_kernel_fwd(const float* wheel_speeds, const float* remaining_clicks,
-                            float* new_output, float* new_remaining_clicks,
-                            float clicks_per_radian, float dt, int size) {
-    int tid = blockDim.x * blockIdx.x + threadIdx.x;
-    if (tid < size) {
-        float angle = wheel_speeds[tid] * dt;
-        float temp = angle * clicks_per_radian + remaining_clicks[tid];
-        float number_clicks = trunc(temp);
-        new_remaining_clicks[tid] = temp - number_clicks;
-        new_output[tid] = number_clicks / (clicks_per_radian * dt);
-    }
-}
-""",
-    'cupy_nominal_kernel_fwd',
+
+class encoder_signal(Enum):
+    NOMINAL = 0
+    OFF = 1
+    STUCK = 2
+
+
+# Define unified CuPy kernel for all encoder signal states
+cupy_encoder_kernel = cupy.RawKernel(
+    pathlib.Path(__file__).with_suffix('.cu').read_text(),
+    'cupy_encoder_kernel',
 )
 
 
-class NominalEncoderFunction(torch.autograd.Function):
-    """class to do autograd"""
+class UnifiedEncoderFunction(torch.autograd.Function):
+    """Unified autograd function for all encoder signal states."""
 
     @staticmethod
     def forward(
-        ctx,
+        ctx: torch.autograd.function.BackwardCFunction,
         wheel_speeds: torch.Tensor,
         remaining_clicks: torch.Tensor,
-        clicks_per_radian: torch.Tensor,
+        rw_signal_state: torch.Tensor,
+        converted: torch.Tensor,
+        clicks_per_radian: float,
         dt: float,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        ctx.save_for_backward(wheel_speeds, remaining_clicks,
-                              clicks_per_radian, dt)
+        ctx.save_for_backward(wheel_speeds, remaining_clicks, rw_signal_state,
+                              converted)
+        ctx.clicks_per_radian = clicks_per_radian
+        ctx.dt = dt
+
         cupy_wheel_speeds = cupy.ascontiguousarray(
             cupy.from_dlpack(wheel_speeds.detach()))
         cupy_remaining_clicks = cupy.ascontiguousarray(
             cupy.from_dlpack(remaining_clicks.detach()))
+        cupy_rw_signal_state = cupy.ascontiguousarray(
+            cupy.from_dlpack(rw_signal_state.detach()))
+        cupy_converted = cupy.ascontiguousarray(
+            cupy.from_dlpack(converted.detach()))
+
         cupy_new_output = cupy.empty_like(cupy_wheel_speeds)
         cupy_new_remaining_clicks = cupy.empty_like(cupy_remaining_clicks)
 
         size = cupy_wheel_speeds.size
-        bs = 128
-        cupy_nominal_kernel_fwd(
-            (bs, ), ((size + bs - 1) // bs, ),
-            (cupy_wheel_speeds, cupy_remaining_clicks, cupy_new_output,
-             cupy_new_remaining_clicks, clicks_per_radian, dt, size))
+        block_sum = 128
+
+        cupy_encoder_kernel(
+            (block_sum, ), ((size + block_sum - 1) // block_sum, ),
+            (cupy_wheel_speeds, cupy_remaining_clicks, cupy_rw_signal_state,
+             cupy_converted, cupy_new_output, cupy_new_remaining_clicks,
+             clicks_per_radian, dt, size, encoder_signal.NOMINAL,
+             encoder_signal.OFF, encoder_signal.STUCK))
 
         torch_new_output = torch.from_dlpack(cupy_new_output)
         torch_new_remaining_clicks = torch.from_dlpack(
             cupy_new_remaining_clicks)
+
         return torch_new_output, torch_new_remaining_clicks
 
     @staticmethod
     def backward(
-        ctx,
+        ctx: torch.autograd.function.BackwardCFunction,
         grad_new_output: torch.Tensor,
-        _: torch.Tensor,
-    ) -> tuple[torch.Tensor, None, None, None]:
-        _, _, _, _ = ctx.saved_tensors
-        grad_wheel_speeds = grad_new_output
-        return grad_wheel_speeds, None, None, None
+        grad_new_remaining_clicks: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, None, None, None, None]:
+        _, _, rw_signal_state, _ = ctx.saved_tensors
+
+        grad_wheel_speeds = torch.where(
+            rw_signal_state == encoder_signal.NOMINAL, grad_new_output,
+            torch.zeros_like(grad_new_output))
+
+        grad_remaining_clicks = torch.where(
+            rw_signal_state == encoder_signal.NOMINAL,
+            grad_new_remaining_clicks,
+            torch.zeros_like(grad_new_remaining_clicks))
+
+        return grad_wheel_speeds, grad_remaining_clicks, None, None, None, None
 
 
 class EncoderState(TypedDict):
@@ -86,18 +104,16 @@ class EncoderState(TypedDict):
 class Encoder(Module):
     """encoder module"""
 
-    def __init__(self,
-                 *args,
-                 timer: Timer,
-                 numRW: int = -1,
-                 clicksPerRotation: int = -1,
-                 **kwargs) -> None:
+    def __init__(
+        self,
+        *args,
+        timer: Timer,
+        numRW: int,
+        clicksPerRotation: int,
+        **kwargs,
+    ) -> None:
 
         super().__init__(*args, timer=timer, **kwargs)
-
-        assert clicksPerRotation > 0, "encoder: number of clicks must be a positive integer."
-        assert numRW > 0, "encoder: number of reaction wheels must be a \
-            positive integer. It may not have been set."
 
         self._num_rw = numRW
         self._clicks_per_rotation = clicksPerRotation
@@ -113,40 +129,29 @@ class Encoder(Module):
         state_dict['converted'] = torch.zeros(self._num_rw)
         return cast(EncoderState, state_dict)
 
-    def forward(self, state_dict: EncoderState, *args,
-                wheel_speeds: torch.Tensor, **kwargs) -> torch.Tensor:
+    def forward(
+        self,
+        state_dict: EncoderState,
+        *args,
+        wheel_speeds: torch.Tensor,
+        **kwargs,
+    ) -> torch.Tensor:
         if self._timer.step_count == 0:
             return wheel_speeds
-
-        new_output = torch.zeros_like(wheel_speeds)
 
         assert torch.isin(
             state_dict['rw_signal_state'],
             torch.tensor([
-                SIGNAL_NOMINAL, SIGNAL_OFF, SIGNAL_STUCK
+                encoder_signal.NOMINAL, encoder_signal.OFF,
+                encoder_signal.STUCK
             ])).all(), "encoder: un-modeled encoder signal mode selected."
 
-        signal_nominal_mask = state_dict['rw_signal_state'] == SIGNAL_NOMINAL
-        if torch.any(signal_nominal_mask):
-            nominal_wheel_speeds = wheel_speeds[signal_nominal_mask]
-            nominal_remaining_clicks = state_dict['remaining_clicks'][
-                signal_nominal_mask]
-            nominal_new_output, nominal_new_remaining_clicks = NominalEncoderFunction.apply(
-                nominal_wheel_speeds, nominal_remaining_clicks,
-                self._clicks_per_radian, self._timer.dt)
-            new_output[signal_nominal_mask] = nominal_new_output
-            state_dict['remaining_clicks'][
-                signal_nominal_mask] = nominal_new_remaining_clicks
+        new_output, new_remaining_clicks = UnifiedEncoderFunction.apply(
+            wheel_speeds, state_dict['remaining_clicks'],
+            state_dict['rw_signal_state'], state_dict['converted'],
+            self._clicks_per_radian, self._timer.dt)
 
-        signal_off_mask = state_dict['rw_signal_state'] == SIGNAL_OFF
-        if torch.any(signal_off_mask):
-            state_dict['remaining_clicks'][signal_off_mask] = 0.0
-            new_output[signal_off_mask] = 0.0
-
-        signal_stuck_mask = state_dict['rw_signal_state'] == SIGNAL_STUCK
-        if torch.any(signal_stuck_mask):
-            new_output[signal_stuck_mask] = state_dict['converted'][
-                signal_stuck_mask]
-
+        state_dict['remaining_clicks'] = new_remaining_clicks
         state_dict['converted'] = new_output
+
         return new_output
