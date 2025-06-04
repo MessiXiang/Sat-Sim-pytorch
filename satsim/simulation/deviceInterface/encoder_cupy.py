@@ -135,7 +135,7 @@ class Encoder(Module):
         *args,
         wheel_speeds: torch.Tensor,
         **kwargs,
-    ) -> torch.Tensor:
+    ) -> tuple[EncoderState, torch.Tensor]:
         if self._timer.step_count == 0:
             return wheel_speeds
 
@@ -154,4 +154,4 @@ class Encoder(Module):
         state_dict['remaining_clicks'] = new_remaining_clicks
         state_dict['converted'] = new_output
 
-        return new_output
+        return state_dict, new_output
