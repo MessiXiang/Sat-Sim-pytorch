@@ -150,6 +150,7 @@ def test_requires_grad_propagation(encoder: Encoder, timer: Timer,
     timer.step()
     wheel_speeds = torch.tensor([1.0, 2.0, 3.0], requires_grad=True)
     state['reaction_wheels_signal_state'].fill_(EncoderSignal.NOMINAL)
+    result: torch.Tensor
     state, (result, ) = encoder(state, wheel_speeds=wheel_speeds)
     result.sum().backward()
     print(wheel_speeds.grad)

@@ -3,7 +3,6 @@ __all__ = [
     'EncoderSignal',
     'EncoderState',
 ]
-from json import encoder
 from typing import Any, TypedDict, cast
 from enum import IntEnum
 import torch
@@ -76,9 +75,8 @@ class UnifiedEncoderFunction(torch.autograd.Function):
              cupy.float32(clicks_per_radian), cupy.float32(dt),
              cupy.int32(size)))
 
-        torch_new_output = torch.from_dlpack(  # type:ignore
-            cupy_new_output).cpu()
-        torch_new_remaining_clicks = torch.from_dlpack(  # type:ignore
+        torch_new_output = torch.from_dlpack(cupy_new_output).cpu()
+        torch_new_remaining_clicks = torch.from_dlpack(
             cupy_new_remaining_clicks).cpu()
 
         return torch_new_output, torch_new_remaining_clicks
@@ -89,7 +87,7 @@ class UnifiedEncoderFunction(torch.autograd.Function):
         grad_new_output: torch.Tensor,
         grad_new_remaining_clicks: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, None, None, None, None]:
-        _, _, rw_signal_state, _ = ctx.saved_tensors  # type:ignore
+        _, _, rw_signal_state, _ = ctx.saved_tensors
 
         grad_wheel_speeds = torch.where(
             rw_signal_state == EncoderSignal.NOMINAL, grad_new_output,
@@ -158,17 +156,3 @@ class Encoder(Module[EncoderState]):
         state_dict['last_output'] = new_output
 
         return state_dict, (new_output, )
-
-    def __call__(
-        self,
-        state_dict: EncoderState,
-        *args,
-        wheel_speeds: torch.Tensor,
-        **kwargs,
-    ) -> tuple[EncoderState, tuple[torch.Tensor]]:
-        return super().__call__(
-            state_dict,
-            *args,
-            wheel_speeds=wheel_speeds,
-            **kwargs,
-        )
