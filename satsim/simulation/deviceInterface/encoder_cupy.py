@@ -1,6 +1,6 @@
 __all__ = [
     'Encoder',
-    'encoder_signal',
+    'EncoderSignal',
     'EncoderState',
 ]
 from json import encoder
@@ -16,7 +16,7 @@ from satsim.architecture import (
 )
 
 
-class encoder_signal(IntEnum):
+class EncoderSignal(IntEnum):
     NOMINAL = 0
     OFF = 1
     STUCK = 2
@@ -24,9 +24,9 @@ class encoder_signal(IntEnum):
 
 class EncoderState(TypedDict):
     """encoder state dict"""
-    rw_signal_state: torch.Tensor
+    reaction_wheels_signal_state: torch.Tensor
     remaining_clicks: torch.Tensor
-    converted: torch.Tensor
+    last_output: torch.Tensor
 
 
 # Define unified CuPy kernel for all encoder signal states
@@ -51,8 +51,8 @@ class UnifiedEncoderFunction(torch.autograd.Function):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         ctx.save_for_backward(wheel_speeds, remaining_clicks, rw_signal_state,
                               converted)
-        ctx.clicks_per_radian = clicks_per_radian
-        ctx.dt = dt
+        ctx.clicks_per_radian = clicks_per_radian  # type:ignore
+        ctx.dt = dt  # type:ignore
 
         cupy_wheel_speeds = cupy.ascontiguousarray(
             cupy.from_dlpack(wheel_speeds.detach().cuda()))
@@ -69,7 +69,6 @@ class UnifiedEncoderFunction(torch.autograd.Function):
         size = cupy_wheel_speeds.size
         block_sum = 128
 
-        print(clicks_per_radian)
         cupy_encoder_kernel(
             (block_sum, ), ((size + block_sum - 1) // block_sum, ),
             (cupy_wheel_speeds, cupy_remaining_clicks, cupy_rw_signal_state,
@@ -77,8 +76,9 @@ class UnifiedEncoderFunction(torch.autograd.Function):
              cupy.float32(clicks_per_radian), cupy.float32(dt),
              cupy.int32(size)))
 
-        torch_new_output = torch.from_dlpack(cupy_new_output).cpu()
-        torch_new_remaining_clicks = torch.from_dlpack(
+        torch_new_output = torch.from_dlpack(  # type:ignore
+            cupy_new_output).cpu()
+        torch_new_remaining_clicks = torch.from_dlpack(  # type:ignore
             cupy_new_remaining_clicks).cpu()
 
         return torch_new_output, torch_new_remaining_clicks
@@ -89,46 +89,47 @@ class UnifiedEncoderFunction(torch.autograd.Function):
         grad_new_output: torch.Tensor,
         grad_new_remaining_clicks: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, None, None, None, None]:
-        _, _, rw_signal_state, _ = ctx.saved_tensors
+        _, _, rw_signal_state, _ = ctx.saved_tensors  # type:ignore
 
         grad_wheel_speeds = torch.where(
-            rw_signal_state == encoder_signal.NOMINAL, grad_new_output,
+            rw_signal_state == EncoderSignal.NOMINAL, grad_new_output,
             torch.zeros_like(grad_new_output))
 
         grad_remaining_clicks = torch.where(
-            rw_signal_state == encoder_signal.NOMINAL,
+            rw_signal_state == EncoderSignal.NOMINAL,
             grad_new_remaining_clicks,
             torch.zeros_like(grad_new_remaining_clicks))
 
         return grad_wheel_speeds, grad_remaining_clicks, None, None, None, None
 
 
-class Encoder(Module):
+class Encoder(Module[EncoderState]):
     """encoder module"""
 
     def __init__(
         self,
         *args,
         timer: Timer,
-        numRW: int,
-        clicksPerRotation: int,
+        num_reaction_wheels: int,
+        clicks_per_rotation: int,
         **kwargs,
     ) -> None:
 
         super().__init__(*args, timer=timer, **kwargs)
 
-        self._num_rw = numRW
-        self._clicks_per_rotation = clicksPerRotation
+        self._num_rw = num_reaction_wheels
+        self._clicks_per_rotation = clicks_per_rotation
 
     @property
     def _clicks_per_radian(self) -> float:
         return self._clicks_per_rotation / (2 * torch.pi)
 
     def reset(self) -> EncoderState:
-        state_dict: dict[str, Any] = super().reset()
-        state_dict['rw_signal_state'] = torch.zeros(self._num_rw)
+        state_dict = {}
+        state_dict.update(super().reset())
+        state_dict['reaction_wheels_signal_state'] = torch.zeros(self._num_rw)
         state_dict['remaining_clicks'] = torch.zeros(self._num_rw)
-        state_dict['converted'] = torch.zeros(self._num_rw)
+        state_dict['last_output'] = torch.zeros(self._num_rw)
         return cast(EncoderState, state_dict)
 
     def forward(
@@ -139,22 +140,35 @@ class Encoder(Module):
         **kwargs,
     ) -> tuple[EncoderState, tuple[torch.Tensor]]:
         if self._timer.step_count == 0:
-            state_dict['converted'] = wheel_speeds
+            state_dict['last_output'] = wheel_speeds
             return state_dict, (wheel_speeds, )
 
         assert torch.isin(
-            state_dict['rw_signal_state'],
+            state_dict['reaction_wheels_signal_state'],
             torch.tensor([
-                encoder_signal.NOMINAL, encoder_signal.OFF,
-                encoder_signal.STUCK
+                EncoderSignal.NOMINAL, EncoderSignal.OFF, EncoderSignal.STUCK
             ])).all(), "encoder: un-modeled encoder signal mode selected."
 
         new_output, new_remaining_clicks = UnifiedEncoderFunction.apply(  # type:ignore
             wheel_speeds, state_dict['remaining_clicks'],
-            state_dict['rw_signal_state'], state_dict['converted'],
-            self._clicks_per_radian, self._timer.dt)
+            state_dict['reaction_wheels_signal_state'],
+            state_dict['last_output'], self._clicks_per_radian, self._timer.dt)
 
         state_dict['remaining_clicks'] = new_remaining_clicks
-        state_dict['converted'] = new_output
+        state_dict['last_output'] = new_output
 
         return state_dict, (new_output, )
+
+    def __call__(
+        self,
+        state_dict: EncoderState,
+        *args,
+        wheel_speeds: torch.Tensor,
+        **kwargs,
+    ) -> tuple[EncoderState, tuple[torch.Tensor]]:
+        return super().__call__(
+            state_dict,
+            *args,
+            wheel_speeds=wheel_speeds,
+            **kwargs,
+        )

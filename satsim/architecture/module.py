@@ -1,13 +1,13 @@
 __all__ = ['Module']
 from abc import ABC, abstractmethod
 
-from typing import Any, Generic, TypeVar, cast
+from typing import Any, Generic, Mapping, TypeVar, cast
 from torch import nn
 import torch
 
 from .timer import Timer
 
-T = TypeVar('T', bound=dict[str, Any])
+T = TypeVar('T', bound=Mapping[str, Any])
 
 
 class Module(nn.Module, ABC, Generic[T]):
@@ -21,7 +21,7 @@ class Module(nn.Module, ABC, Generic[T]):
                 **kwargs) -> tuple[T, tuple[Any, ...]]:
         pass
 
-    def reset(self) -> T:
+    def reset(self) -> Mapping[str, Any]:
         state_dict: dict[str, Any] = {}
         for name, module in self.named_children():
             module = cast(Module, module)

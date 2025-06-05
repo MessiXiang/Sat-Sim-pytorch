@@ -6,16 +6,17 @@ import torch
 from satsim.architecture import Timer
 from satsim.simulation.deviceInterface.encoder_cupy import (Encoder,
                                                             EncoderState,
-                                                            encoder_signal)
+                                                            EncoderSignal)
 
 
-def _run_one_step(state: EncoderState,
-                  input_tensor: torch.Tensor,
-                  encoder: Encoder,
-                  timer: Timer,
-                  true_tensor: torch.Tensor,
-                  accuracy: float,
-                  check_grad=True) -> EncoderState:
+def _run_one_step(
+    state: EncoderState,
+    input_tensor: torch.Tensor,
+    encoder: Encoder,
+    timer: Timer,
+    true_tensor: torch.Tensor,
+    accuracy: float,
+) -> EncoderState:
     new_state, (output, ) = encoder(state, wheel_speeds=input_tensor)
     timer.step()
     assert torch.allclose(output, true_tensor, atol=accuracy)
@@ -31,7 +32,9 @@ def timer() -> Timer:
 
 @pytest.fixture()
 def encoder(timer: Timer) -> Encoder:
-    encoder = Encoder(timer=timer, numRW=3, clicksPerRotation=2)
+    encoder = Encoder(timer=timer,
+                      num_reaction_wheels=3,
+                      clicks_per_rotation=2)
     return encoder
 
 
@@ -43,7 +46,9 @@ def state(encoder: Encoder) -> EncoderState:
 @pytest.mark.parametrize("accuracy", [1e-8])
 def test_encoder(accuracy: float, timer: Timer, encoder,
                  state: EncoderState) -> None:
-    encoder = Encoder(timer=timer, numRW=3, clicksPerRotation=2)
+    encoder = Encoder(timer=timer,
+                      num_reaction_wheels=3,
+                      clicks_per_rotation=2)
     run_one_step = partial(
         _run_one_step,
         accuracy=accuracy,
@@ -73,13 +78,13 @@ def test_encoder(accuracy: float, timer: Timer, encoder,
                          input_tensor=input_tensor,
                          true_tensor=trueWheelSpeedsEncoded[2])
 
-    state['rw_signal_state'].fill_(encoder_signal.OFF)  # type:ignore
+    state['reaction_wheels_signal_state'].fill_(EncoderSignal.OFF)
 
     state = run_one_step(state=state,
                          input_tensor=input_tensor,
                          true_tensor=trueWheelSpeedsEncoded[3])
 
-    state['rw_signal_state'].fill_(encoder_signal.NOMINAL)  # type:ignore
+    state['reaction_wheels_signal_state'].fill_(EncoderSignal.NOMINAL)
     input_tensor = torch.tensor([500, 400, 300],
                                 dtype=torch.float32,
                                 requires_grad=True)
@@ -88,7 +93,7 @@ def test_encoder(accuracy: float, timer: Timer, encoder,
                          input_tensor=input_tensor,
                          true_tensor=trueWheelSpeedsEncoded[4])
 
-    state['rw_signal_state'].fill_(encoder_signal.STUCK)  # type:ignore
+    state['reaction_wheels_signal_state'].fill_(EncoderSignal.STUCK)
     input_tensor = torch.tensor([100, 200, 300],
                                 dtype=torch.float32,
                                 requires_grad=True)
@@ -101,7 +106,7 @@ def test_encoder(accuracy: float, timer: Timer, encoder,
 def test_initialization(encoder: Encoder, state: EncoderState) -> None:
     assert encoder._num_rw == 3
     assert encoder._clicks_per_rotation == 2
-    assert torch.equal(state['rw_signal_state'],
+    assert torch.equal(state['reaction_wheels_signal_state'],
                        torch.zeros(3, dtype=torch.int32))
     assert torch.equal(state['remaining_clicks'],
                        torch.zeros(3, dtype=torch.float32))
@@ -110,10 +115,10 @@ def test_initialization(encoder: Encoder, state: EncoderState) -> None:
 
 
 def test_reset(encoder: Encoder, state: EncoderState) -> None:
-    state['rw_signal_state'].fill_(1)
+    state['reaction_wheels_signal_state'].fill_(1)
     state['remaining_clicks'].fill_(0.5)
     state = encoder.reset()
-    assert torch.equal(state['rw_signal_state'],
+    assert torch.equal(state['reaction_wheels_signal_state'],
                        torch.zeros(3, dtype=torch.int32))
     assert torch.equal(state['remaining_clicks'],
                        torch.zeros(3, dtype=torch.float32))
@@ -134,7 +139,7 @@ def test_zero_dt_behavior(timer: Timer) -> None:
 def test_invalid_signal_state(encoder: Encoder, timer: Timer,
                               state: EncoderState) -> None:
     timer.step()
-    state['rw_signal_state'][0] = 5  # 无效状态
+    state['reaction_wheels_signal_state'][0] = 5  # unvalid signal state
 
     with pytest.raises(AssertionError, match="un-modeled encoder signal mode"):
         encoder(state, wheel_speeds=torch.tensor([1.0, 2.0, 3.0]))
@@ -144,7 +149,7 @@ def test_requires_grad_propagation(encoder: Encoder, timer: Timer,
                                    state: EncoderState) -> None:
     timer.step()
     wheel_speeds = torch.tensor([1.0, 2.0, 3.0], requires_grad=True)
-    state['rw_signal_state'].fill_(encoder_signal.NOMINAL)  # type:ignore
+    state['reaction_wheels_signal_state'].fill_(EncoderSignal.NOMINAL)
     state, (result, ) = encoder(state, wheel_speeds=wheel_speeds)
     result.sum().backward()
     print(wheel_speeds.grad)
@@ -154,7 +159,7 @@ def test_requires_grad_propagation(encoder: Encoder, timer: Timer,
 def test_state_dict(encoder: Encoder, state: EncoderState) -> None:
     assert len(list(encoder.parameters())) == 0
     state_dict = encoder.reset()
-    assert "rw_signal_state" in state_dict and "remaining_clicks" in state_dict and "converted" in state_dict
+    assert 'reaction_wheels_signal_state' in state_dict and 'remaining_clicks' in state_dict and 'last_output' in state_dict
 
 
 if __name__ == "__main__":
