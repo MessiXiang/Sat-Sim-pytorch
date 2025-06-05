@@ -4,9 +4,11 @@ import pytest
 import torch
 
 from satsim.architecture import Timer
-from satsim.simulation.deviceInterface.encoder_cupy import (Encoder,
-                                                            EncoderState,
-                                                            EncoderSignal)
+from satsim.simulation.deviceInterface.encoder import (
+    Encoder,
+    EncoderState,
+    EncoderSignal,
+)
 
 
 def _run_one_step(
