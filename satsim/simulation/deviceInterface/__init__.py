@@ -1,1 +1,1 @@
-from .encoder_cupy import *
+from .encoder import *

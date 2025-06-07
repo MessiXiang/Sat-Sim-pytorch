@@ -19,9 +19,10 @@ def _run_one_step(
     true_tensor: torch.Tensor,
     accuracy: float,
 ) -> EncoderState:
+    output: torch.Tensor
     new_state, (output, ) = encoder(state, wheel_speeds=input_tensor)
     timer.step()
-    assert torch.allclose(output, true_tensor, atol=accuracy)
+    assert torch.allclose(output.cpu(), true_tensor, atol=accuracy)
     return new_state
 
 
@@ -62,7 +63,7 @@ def test_encoder(accuracy: float, timer: Timer, encoder,
         [[100., 200., 300.], [97.38937226, 197.92033718, 298.45130209],
          [100.53096491, 201.06192983, 298.45130209], [0., 0., 0.],
          [499.51323192, 398.98226701, 298.45130209],
-         [499.51323192, 398.98226701, 298.45130209]])
+         [499.51323192, 398.98226701, 298.45130209]], )
 
     input_tensor = torch.tensor([100, 200, 300],
                                 dtype=torch.float32,
@@ -150,7 +151,11 @@ def test_invalid_signal_state(encoder: Encoder, timer: Timer,
 def test_requires_grad_propagation(encoder: Encoder, timer: Timer,
                                    state: EncoderState) -> None:
     timer.step()
-    wheel_speeds = torch.tensor([1.0, 2.0, 3.0], requires_grad=True)
+    wheel_speeds = torch.tensor(
+        [1.0, 2.0, 3.0],
+        requires_grad=True,
+        device='cuda:0',
+    )
     state['reaction_wheels_signal_state'].fill_(EncoderSignal.NOMINAL)
     result: torch.Tensor
     state, (result, ) = encoder(state, wheel_speeds=wheel_speeds)

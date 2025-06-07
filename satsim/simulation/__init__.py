@@ -1,1 +1,1 @@
-from .deviceInterface import Encoder
+from .deviceInterface import *
