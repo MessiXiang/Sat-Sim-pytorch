@@ -3,5 +3,12 @@
 ## Installation
 ```
 pip install torch torchaudio torchvision
-pip install -e .
+pip install pytest
+
+pip install --no-build-isolation -e .
+```
+
+## Test
+```
+pytest -vv .
 ```

@@ -6,12 +6,14 @@
 #include <vector>
 #include <cmath>
 
+#include "encoder.h"
+
 extern "C" {
     PyObject* PyInit__C(void) {
         static struct PyModuleDef module_def = {
             PyModuleDef_HEAD_INIT,
             "_C",
-            "This module is a encoder kernel register trigger.\n\nYou should never use this module. Before import this, you should import torch first.",
+            "This module is a encoder kernel register trigger.\n\nBefore import this, make sure you have imported torch first. You should never use this module.",
             -1,
             NULL,
         };

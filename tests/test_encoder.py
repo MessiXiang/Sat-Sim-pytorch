@@ -157,10 +157,10 @@ def test_requires_grad_propagation(encoder: Encoder, timer: Timer,
         device='cuda:0',
     )
     state['reaction_wheels_signal_state'].fill_(EncoderSignal.NOMINAL)
+    state = encoder.move_state_to(state, "cuda:0")
     result: torch.Tensor
     state, (result, ) = encoder(state, wheel_speeds=wheel_speeds)
     result.sum().backward()
-    print(wheel_speeds.grad)
     assert wheel_speeds.grad is not None
 
 

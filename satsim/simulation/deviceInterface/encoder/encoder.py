@@ -3,11 +3,10 @@ __all__ = [
     'EncoderSignal',
     'EncoderState',
 ]
-from typing import TypedDict, cast
+import os
+from typing import Any, TypedDict, cast
 from enum import IntEnum
-import pathlib
 import torch
-import cupy
 
 from satsim.architecture import (
     Module,
@@ -45,17 +44,26 @@ class Encoder(Module[EncoderState]):
 
         self._num_rw = num_reaction_wheels
         self._clicks_per_rotation = clicks_per_rotation
+        mode = os.environ.get('MODE', "C")
+
+        self.mode = mode
+        if mode == "C":
+            self.kernel = torch.ops.encoder.encoder_kernel
+        elif mode == "PY":
+            self.kernel = torch.ops.encoder.encoder_py
 
     @property
     def _clicks_per_radian(self) -> float:
         return self._clicks_per_rotation / (2 * torch.pi)
 
-    def reset(self) -> EncoderState:
-        state_dict = {}
-        state_dict.update(super().reset())
+    def reset(self, device: str = 'cpu') -> EncoderState:
+        state_dict: dict[str, Any] = {}
         state_dict['reaction_wheels_signal_state'] = torch.zeros(self._num_rw)
         state_dict['remaining_clicks'] = torch.zeros(self._num_rw)
         state_dict['last_output'] = torch.zeros(self._num_rw)
+        state_dict = self.move_state_to(state_dict, device)
+
+        state_dict.update(super().reset(device))
         return cast(EncoderState, state_dict)
 
     def forward(
@@ -71,15 +79,19 @@ class Encoder(Module[EncoderState]):
 
         assert torch.isin(
             state_dict['reaction_wheels_signal_state'],
-            torch.tensor([
-                EncoderSignal.NOMINAL, EncoderSignal.OFF, EncoderSignal.STUCK
-            ])).all(), "encoder: un-modeled encoder signal mode selected."
+            torch.tensor(
+                [
+                    EncoderSignal.NOMINAL, EncoderSignal.OFF,
+                    EncoderSignal.STUCK
+                ],
+                device=state_dict['reaction_wheels_signal_state'].device,
+            ),
+        ).all(), "encoder: un-modeled encoder signal mode selected."
 
-        new_output, new_remaining_clicks = torch.ops.encoder.encoder_kernel(
-            wheel_speeds.cuda(), state_dict['remaining_clicks'].cuda(),
-            state_dict['reaction_wheels_signal_state'].cuda(),
-            state_dict['last_output'].cuda(), self._clicks_per_radian,
-            self._timer.dt)
+        new_output, new_remaining_clicks = self.kernel(
+            wheel_speeds, state_dict['remaining_clicks'],
+            state_dict['reaction_wheels_signal_state'],
+            state_dict['last_output'], self._clicks_per_radian, self._timer.dt)
 
         state_dict['remaining_clicks'] = new_remaining_clicks
         state_dict['last_output'] = new_output
