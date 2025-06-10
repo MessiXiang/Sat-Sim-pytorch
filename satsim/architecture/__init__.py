@@ -1,3 +1,3 @@
 from .constants import *
-from .timer import Timer
-from .module import Module
+from .timer import *
+from .module import *

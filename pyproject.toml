@@ -4,3 +4,15 @@ requires = [
     "torch",
 ]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "SatSim"
+requires-python= ">=3.9"
+description = "A simulation framework based on pytorch for satellites"
+readme = "README.md"
+dynamic = ["version","dependencies"]
+
+
+[project.urls]
+Repository = "https://github.com/MessiXiang/Sat-Sim-pytorch.git"
+Issues = "https://github.com/MessiXiang/Sat-Sim-pytorch/issues"

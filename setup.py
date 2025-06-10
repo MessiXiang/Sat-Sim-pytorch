@@ -22,6 +22,9 @@ def find_all_kernel_extension():
     if debug_mode:
         print("Compiling in debug mode")
 
+    use_cuda = torch.cuda.is_available() and CUDA_HOME is not None
+    extension = CUDAExtension if use_cuda else CppExtension
+
     extra_link_args = []
     extra_compile_args = {
         "cxx": [
@@ -38,23 +41,34 @@ def find_all_kernel_extension():
         extra_compile_args["nvcc"].append("-g")
         extra_link_args.extend(["-O0", "-g"])
 
-    ## Only test for encoder kernel
-
-    cuda_path = os.path.join('satsim', 'simulation', 'deviceInterface',
-                             'encoder', 'cuda', 'encoder_kernel.cu')
-    cpp_path = os.path.join('satsim', 'simulation', 'deviceInterface',
-                            'encoder', 'cuda', 'encoder.cpp')
-    sources = [cpp_path, cuda_path]
-
-    ext_modules = [
-        CUDAExtension(
-            f"satsim.simulation.deviceInterface.encoder._C",
-            sources,
-            extra_compile_args=extra_compile_args,
-            extra_link_args=extra_link_args,
-            py_limited_api=py_limited_api,
-        )
+    ## add all extension into ext_modules
+    ext_modules = []
+    modules_dir = os.path.join('satsim', 'simulation')
+    module_type_dirs = [
+        directory for directory in glob.glob(os.path.join(modules_dir, "*"))
+        if os.path.isdir(directory)
     ]
+    for module_type in module_type_dirs:
+        module_dirs: list[str] = [
+            directory
+            for directory in glob.glob(os.path.join(module_type, "*"))
+            if os.path.isdir(directory)
+        ]
+        for module in module_dirs:
+            cpp_path = glob.glob(os.path.join(module, "*.cpp"))
+            cuda_path = glob.glob(os.path.join(module,
+                                               "*.cu")) if use_cuda else []
+            sources = cpp_path + cuda_path
+            module_name = '.'.join(module.split(os.path.sep))
+            if sources:
+                ext_modules.append(
+                    extension(
+                        f"{module_name}._C",
+                        sources,
+                        extra_compile_args=extra_compile_args,
+                        extra_link_args=extra_link_args,
+                        py_limited_api=py_limited_api,
+                    ))
 
     return ext_modules
 

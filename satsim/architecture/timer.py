@@ -1,46 +1,52 @@
+__all__ = [
+    'Timer',
+]
+
 from typing import TypedDict
 
-
-# TODO: add timer state dict
-class TimerStateDict(TypedDict):
-    step_count: int
+import todd
 
 
-class Timer:
+class StateDict(TypedDict):
+    step: int
+
+
+class Timer(todd.utils.StateDictMixin):
 
     def __init__(
         self,
         dt: float = 0.01,
         start_time: float = 0.0,
     ) -> None:
-        self.dt = dt
+        assert dt > 0, "dt must be greater than 0"
+        self._dt = dt
         self._start_time = start_time
-
-    @property
-    def step_count(self) -> int:
-        return self._step_count
 
     @property
     def dt(self) -> float:
         return self._dt
 
-    @dt.setter
-    def dt(self, value: float) -> None:
-        assert value > 0, "dt must be a float superior than 0"
-        self._dt = value
+    @property
+    def step_count(self) -> int:
+        return self._step
+
+    def reset(self) -> None:
+        self._step = 0
 
     @property
     def time(self) -> float:
-        return self._start_time + self._step_count * self._dt
+        return self._start_time + self._step * self._dt
 
     def step(self) -> None:
-        self._step_count += 1
+        self._step += 1
 
-    def reset(self) -> None:
-        self._step_count = 0
+    def state_dict(self, *args, **kwargs) -> StateDict:
+        return StateDict(step=self._step)
 
-    def state_dict(self) -> TimerStateDict:
-        return dict(step_count=self._step_count)
-
-    def load_state_dict(self, state_dict: TimerStateDict) -> None:
-        self._step_count = state_dict["step_count"]
+    def load_state_dict(
+        self,
+        state_dict: StateDict,
+        *args,
+        **kwargs,
+    ) -> todd.utils.Keys | None:
+        self._step = state_dict['step']

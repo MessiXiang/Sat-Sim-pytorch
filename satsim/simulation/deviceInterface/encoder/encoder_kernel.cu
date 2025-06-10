@@ -9,115 +9,96 @@
 
 #include "encoder.h"
 
-// CUDA kernel
-namespace encoder{
-    __global__ void cuda_encoder_kernel(
-        const float* wheel_speeds, const float* remaining_clicks,
-        const float* rw_signal_state, const float* converted,
-        float* new_output, float* new_remaining_clicks,
-        float clicks_per_radian, float dt, int size) {
-        
+namespace encoder {
+    __global__ void kernel(
+        const float* target_speeds, 
+        const float* remaining_clicks,
+        const int* signals, const float* speeds,
+        float* new_speeds, float* new_remaining_clicks,
+        float clicks_per_radian, float dt, int size
+    ) {
         int tid = blockDim.x * blockIdx.x + threadIdx.x;
-        if (tid < size) {
-            float signal_state = rw_signal_state[tid];
+        if (tid >= size) {
+            return;
+        }
 
-            if (signal_state == SIGNAL_NOMINAL) {
-                // SIGNAL_NOMINAL processing
-                float angle = wheel_speeds[tid] * dt;
-                float temp = angle * clicks_per_radian + remaining_clicks[tid];
-                float number_clicks = trunc(temp);
-                new_remaining_clicks[tid] = temp - number_clicks;
-                new_output[tid] = number_clicks / (clicks_per_radian * dt);
-            }
-            else if (signal_state == SIGNAL_OFF) {
-                // SIGNAL_OFF processing
-                new_remaining_clicks[tid] = 0.0f;
-                new_output[tid] = 0.0f;
-            }
-            else if (signal_state == SIGNAL_STUCK) {
-                // SIGNAL_STUCK processing
-                new_remaining_clicks[tid] = remaining_clicks[tid]; // keep unchanged
-                new_output[tid] = converted[tid];
-            }
-            else {
-                // Default case (should not happen if input is valid)
-                new_remaining_clicks[tid] = remaining_clicks[tid];
-                new_output[tid] = wheel_speeds[tid];
-            }
+        switch (signals[tid]) {
+        case int(ReactionWheelSignal::NOMINAL):
+            float angle = target_speeds[tid] * dt;
+            float temp = angle * clicks_per_radian + remaining_clicks[tid];
+            float number_clicks = trunc(temp);
+            new_remaining_clicks[tid] = temp - number_clicks;
+            new_speeds[tid] = number_clicks / (clicks_per_radian * dt);
+            return;
+        case int(ReactionWheelSignal::STOPPED):
+            new_remaining_clicks[tid] = 0.0f;
+            new_speeds[tid] = 0.0f;
+            return;
+        case int(ReactionWheelSignal::LOCKED):
+            new_remaining_clicks[tid] = remaining_clicks[tid]; 
+            new_speeds[tid] = speeds[tid];
+            return;
+        default:
+            assert(false);
         }
     }
 
-    // CUDA error checking macro
-    #define CUDA_CHECK(call) \
-        do { \
-            cudaError_t error = call; \
-            if (error != cudaSuccess) { \
-                fprintf(stderr, "CUDA error at %s:%d - %s\n", __FILE__, __LINE__, \
-                        cudaGetErrorString(error)); \
-                exit(1); \
-            } \
-        } while(0)
+    // #define CUDA_CHECK(call) \
+    //     do { \
+    //         cudaError_t error = call; \
+    //         if (error != cudaSuccess) { \
+    //             fprintf(stderr, "CUDA error at %s:%d - %s\n", __FILE__, __LINE__, \
+    //                     cudaGetErrorString(error)); \
+    //             exit(1); \
+    //         } \
+    //     } while(0)
 
-    // C++ wrapper function
-    std::tuple<torch::Tensor, torch::Tensor> encoder_cuda_forward(
-        torch::Tensor wheel_speeds,
+    // C++ forward_cuda function
+    std::tuple<torch::Tensor, torch::Tensor> forward_cuda(
+        torch::Tensor target_speeds,
         torch::Tensor remaining_clicks,
-        torch::Tensor rw_signal_state,
-        torch::Tensor converted,
+        torch::Tensor signals,
+        torch::Tensor speeds,
         double clicks_per_radian,
         double dt) {
         
-        // Check inputs are on CUDA
-        TORCH_CHECK(wheel_speeds.is_cuda(), "wheel_speeds must be a CUDA tensor");
+        TORCH_CHECK(target_speeds.is_cuda(), "target_speeds must be a CUDA tensor");
         TORCH_CHECK(remaining_clicks.is_cuda(), "remaining_clicks must be a CUDA tensor");
-        TORCH_CHECK(rw_signal_state.is_cuda(), "rw_signal_state must be a CUDA tensor");
-        TORCH_CHECK(converted.is_cuda(), "converted must be a CUDA tensor");
+        TORCH_CHECK(signals.is_cuda(), "signals must be a CUDA tensor");
+        TORCH_CHECK(speeds.is_cuda(), "speeds must be a CUDA tensor");
         
-        // Check inputs are contiguous
-        wheel_speeds = wheel_speeds.contiguous();
+        target_speeds = target_speeds.contiguous();
         remaining_clicks = remaining_clicks.contiguous();
-        rw_signal_state = rw_signal_state.contiguous();
-        converted = converted.contiguous();
+        signals = signals.contiguous();
+        speeds = speeds.contiguous();
         
-        // Get tensor dimensions
-        const int size = wheel_speeds.numel();
+        torch::Tensor new_speeds = torch::zeros_like(speeds);
+        torch::Tensor new_remaining_clicks = torch::zeros_like(remaining_clicks);
         
-        // Check all tensors have same size
-        TORCH_CHECK(remaining_clicks.numel() == size, "remaining_clicks size mismatch");
-        TORCH_CHECK(rw_signal_state.numel() == size, "rw_signal_state size mismatch");
-        TORCH_CHECK(converted.numel() == size, "converted size mismatch");
-        
-        // Create output tensors
-        auto options = torch::TensorOptions().dtype(wheel_speeds.dtype()).device(wheel_speeds.device());
-        torch::Tensor new_output = torch::zeros({size}, options);
-        torch::Tensor new_remaining_clicks = torch::zeros({size}, options);
-        
-        // Launch configuration
-        const int threads_per_block = 256;
+        const int size = target_speeds.numel();
+
+        const int threads_per_block = 32;
         const int blocks = (size + threads_per_block - 1) / threads_per_block;
-        
-        // Launch kernel
-        cuda_encoder_kernel<<<blocks, threads_per_block>>>(
-            wheel_speeds.data_ptr<float>(),
+        kernel<<<blocks, threads_per_block>>>(
+            target_speeds.data_ptr<float>(),
             remaining_clicks.data_ptr<float>(),
-            rw_signal_state.data_ptr<float>(),
-            converted.data_ptr<float>(),
-            new_output.data_ptr<float>(),
+            signals.data_ptr<int>(),
+            speeds.data_ptr<float>(),
+            new_speeds.data_ptr<float>(),
             new_remaining_clicks.data_ptr<float>(),
             clicks_per_radian,
             dt,
             size
         );
         
-        // Check for kernel launch errors
-        CUDA_CHECK(cudaGetLastError());
-        CUDA_CHECK(cudaDeviceSynchronize());
+        TORCH_CHECK(!cudaGetLastError());
+        TORCH_CHECK(!cudaDeviceSynchronize());
         
-        return {new_output, new_remaining_clicks};
+        return {new_speeds, new_remaining_clicks};
     }
     
 
     TORCH_LIBRARY_IMPL(encoder, CUDA, m) {
-        m.impl("encoder_kernel", &encoder_cuda_forward);
+        m.impl("c", &forward_cuda);
     }
 }
