@@ -60,6 +60,7 @@ class WheelSpeedEncoder(Module[WheelSpeedEncoderStateDict]):
         if signals is not None:
             assert all(map(WheelSpeedEncoderSignal.validate, signals.flatten().tolist())), \
                 "encoder: un-modeled encoder signal mode selected."
+            state_dict['signals'] = signals.int()
 
         if self._timer.step_count == 0:
             state_dict['speeds'] = target_speeds

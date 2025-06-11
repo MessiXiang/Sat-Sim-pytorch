@@ -44,31 +44,25 @@ def find_all_kernel_extension():
     ## add all extension into ext_modules
     ext_modules = []
     modules_dir = os.path.join('satsim', 'simulation')
-    module_type_dirs = [
+    module_dirs = [
         directory for directory in glob.glob(os.path.join(modules_dir, "*"))
         if os.path.isdir(directory)
     ]
-    for module_type in module_type_dirs:
-        module_dirs: list[str] = [
-            directory
-            for directory in glob.glob(os.path.join(module_type, "*"))
-            if os.path.isdir(directory)
-        ]
-        for module in module_dirs:
-            cpp_path = glob.glob(os.path.join(module, "*.cpp"))
-            cuda_path = glob.glob(os.path.join(module,
-                                               "*.cu")) if use_cuda else []
-            sources = cpp_path + cuda_path
-            module_name = '.'.join(module.split(os.path.sep))
-            if sources:
-                ext_modules.append(
-                    extension(
-                        f"{module_name}._C",
-                        sources,
-                        extra_compile_args=extra_compile_args,
-                        extra_link_args=extra_link_args,
-                        py_limited_api=py_limited_api,
-                    ))
+
+    for module in module_dirs:
+        cpp_path = glob.glob(os.path.join(module, "*.cpp"))
+        cuda_path = glob.glob(os.path.join(module, "*.cu")) if use_cuda else []
+        sources = cpp_path + cuda_path
+        module_name = '.'.join(module.split(os.path.sep))
+        if sources:
+            ext_modules.append(
+                extension(
+                    f"{module_name}._C",
+                    sources,
+                    extra_compile_args=extra_compile_args,
+                    extra_link_args=extra_link_args,
+                    py_limited_api=py_limited_api,
+                ))
 
     return ext_modules
 

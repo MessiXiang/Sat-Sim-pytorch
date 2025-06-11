@@ -24,10 +24,10 @@ namespace encoder {
 
         switch (signals[tid]) {
         case int(ReactionWheelSignal::NOMINAL):
-            float angle = target_speeds[tid] * dt;
-            float temp = angle * clicks_per_radian + remaining_clicks[tid];
-            float number_clicks = trunc(temp);
-            new_remaining_clicks[tid] = temp - number_clicks;
+            float target_radian = target_speeds[tid] * dt;
+            float target_clicks = target_radian * clicks_per_radian + remaining_clicks[tid];
+            float number_clicks = floor(target_clicks);
+            new_remaining_clicks[tid] = target_clicks - number_clicks;
             new_speeds[tid] = number_clicks / (clicks_per_radian * dt);
             return;
         case int(ReactionWheelSignal::STOPPED):

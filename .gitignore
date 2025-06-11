@@ -1,6 +1,5 @@
 *.pyc
 Pipfile*
-logger.py
 __pycache__/
 build/
 **.egg-info/
@@ -8,4 +7,3 @@ build/
 .mypy_cache/
 *.so
 .vscode/
-test.py
