@@ -12,6 +12,9 @@ description = "A simulation framework based on pytorch for satellites"
 readme = "README.md"
 dynamic = ["version","dependencies"]
 
+[tool.pytest.ini_options]
+testpaths = ["satsim/simulation/*/unit_test/", "tests/"]
+pythonpath = ["src"]
 
 [project.urls]
 Repository = "https://github.com/MessiXiang/Sat-Sim-pytorch.git"

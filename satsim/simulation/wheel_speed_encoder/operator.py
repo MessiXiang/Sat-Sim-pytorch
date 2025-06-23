@@ -13,7 +13,7 @@ __all__ = []
 import torch
 
 from . import _C
-from .encoder import WheelSpeedEncoderSignal
+from .wheel_speed_encoder import WheelSpeedEncoderSignal
 
 
 def _backward(
@@ -62,7 +62,7 @@ def _setup_context(
     ctx.dt = dt
 
 
-@torch.library.custom_op("encoder::py_", mutates_args=[])
+@torch.library.custom_op("wheel_speed_encoder::py_", mutates_args=[])
 def encoder_py(
     target_speeds: torch.Tensor,
     remaining_clicks: torch.Tensor,
@@ -110,10 +110,10 @@ def encoder_py(
     return speeds, remaining_clicks
 
 
-torch.library.register_autograd("encoder::c",
+torch.library.register_autograd("wheel_speed_encoder::c",
                                 _backward,
                                 setup_context=_setup_context)
 
-torch.library.register_autograd("encoder::py_",
+torch.library.register_autograd("wheel_speed_encoder::py_",
                                 _backward,
                                 setup_context=_setup_context)

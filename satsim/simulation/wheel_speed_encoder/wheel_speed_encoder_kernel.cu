@@ -7,7 +7,7 @@
 #include <cuda_runtime.h>
 #include <vector>
 
-#include "encoder.h"
+#include "wheel_speed_encoder.h"
 
 namespace encoder {
     __global__ void kernel(
@@ -98,7 +98,7 @@ namespace encoder {
     }
     
 
-    TORCH_LIBRARY_IMPL(encoder, CUDA, m) {
+    TORCH_LIBRARY_IMPL(wheel_speed_encoder, CUDA, m) {
         m.impl("c", &forward_cuda);
     }
 }

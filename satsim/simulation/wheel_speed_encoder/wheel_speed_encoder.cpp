@@ -6,7 +6,7 @@
 #include <vector>
 #include <cmath>
 
-#include "encoder.h"
+#include "wheel_speed_encoder.h"
 
 extern "C" {
     PyObject* PyInit__C(void) {
@@ -80,11 +80,11 @@ namespace encoder {
         return {speeds, remaining_clicks};
 
     }
-    TORCH_LIBRARY(encoder, m) {
+    TORCH_LIBRARY(wheel_speed_encoder, m) {
         m.def("c(Tensor target_speeds, Tensor remaining_clicks, Tensor signals, Tensor speeds, float clicks_per_radian, float dt) -> (Tensor, Tensor)");
     }
     
-    TORCH_LIBRARY_IMPL(encoder, CPU, m) {
+    TORCH_LIBRARY_IMPL(wheel_speed_encoder, CPU, m) {
         m.impl("c", &forward_cpu);
     }
 }
