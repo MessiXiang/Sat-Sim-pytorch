@@ -4,7 +4,7 @@ import pytest
 import torch
 
 from satsim.architecture import Timer
-from satsim.simulation import WheelSpeedEncoder, WheelSpeedEncoderSignal
+from satsim.simulation.wheel_speed_encoder import WheelSpeedEncoder, WheelSpeedEncoderSignal
 
 
 def get_operator(

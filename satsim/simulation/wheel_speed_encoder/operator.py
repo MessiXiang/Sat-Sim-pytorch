@@ -1,11 +1,11 @@
 '''This Module perform register call for python and c++/cuda implementation of encoder kernel.
 
-In no circumstance should you use anything from this module. 
+In no circumstance should anything from this module be used. 
 All function should be called from torch.ops.encoder namespace.
 
 All available operator:
-torch.ops.encoder.c
-torch.ops.encoder.py_
+torch.ops.wheel_speed_encoder.c
+torch.ops.wheel_speed_encoder.py_
 '''
 
 __all__ = []

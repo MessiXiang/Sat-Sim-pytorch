@@ -1,17 +1,21 @@
-__all__ = ['ReactionWheels', 'create_reaction_wheels']
-from dataclasses import dataclass
-from typing import Optional
+__all__ = [
+    'ReactionWheelsStateDict',
+    'ReactionWheel',
+    'HoneywellHR12Large',
+    'HoneywellHR12Medium',
+    'HoneywellHR12Small',
+]
+from dataclasses import dataclass, field, fields
+from typing import Self, TypedDict
 
 import torch
 
 from satsim.architecture import constants
 
-from .data import ReactionWheelModels, ReactionWheelsOutput
-from .reaction_wheel_type_registry import reaction_wheel_type_registry
+from .data import ReactionWheelModels
 
 
-@dataclass
-class ReactionWheels:
+class ReactionWheelsStateDict(TypedDict):
     """This class stores all wheel states. All values are of type torch.Tensor with size (...,n)"""
     rWB_B: torch.Tensor  # [3]
     gsHat_B: torch.Tensor  # [3]
@@ -28,12 +32,12 @@ class ReactionWheels:
     rTildeWcB_B: torch.Tensor  # [3,3]
     mass: torch.Tensor
     theta: torch.Tensor
-    Omega: torch.Tensor
+    omega: torch.Tensor
     Js: torch.Tensor
     Jt: torch.Tensor
     Jg: torch.Tensor
-    U_s: torch.Tensor
-    U_d: torch.Tensor
+    u_s: torch.Tensor
+    u_d: torch.Tensor
     d: torch.Tensor
     J13: torch.Tensor
     current_torque: torch.Tensor
@@ -52,327 +56,290 @@ class ReactionWheels:
     reaction_wheel_model: torch.Tensor  # ReactionWheelModels
     friction_stribeck: torch.Tensor  # bool
 
-    @property
-    def num_reaction_wheel(self) -> int:
-        return self.reaction_wheel_model.size(
-            -1) if self.reaction_wheel_model is not None else 0
 
-    @property
-    def is_jitter(self) -> torch.Tensor:
-        return self.reaction_wheel_model != ReactionWheelModels.BALANCED_WHEELS
+zero = lambda: torch.zeros(1)
+v3zero = lambda: torch.zeros(3)
+m33zero = lambda: torch.zeros(3, 3)
 
-    @property
-    def export_key(self) -> list[str]:
-        return [
-            "rWB_B",
-            "gsHat_B",
-            "w2Hat0_B",
-            "w3Hat0_B",
-            "mass",
-            "theta",
-            "Omega",
-            "Js",
-            "Jt",
-            "Jg",
-            "U_s",
-            "U_d",
-            "d",
-            "J13",
-            "torque_current",
-            "frictionTorque",
-            "torque_max",
-            "torque_min",
-            "fCoulomb",
-            "Omega_max",
-            "power_max",
-            "RWModel",
-        ]
 
-    def export(self) -> ReactionWheelsOutput:
-        export_dict = {k: getattr(self, k) for k in self.export_key}
-        export_dict['linearFrictionRatio'] = torch.zeros_like(
-            self.reaction_wheel_model)
-        return export_dict
+@dataclass
+class ReactionWheel:
+    rWB_B: torch.Tensor  # [3]
+    gsHat_B: torch.Tensor  # [3]
+    w2Hat0_B: torch.Tensor  # [3]
+    w3Hat0_B: torch.Tensor  # [3]
+    omega: torch.Tensor
+    Js: torch.Tensor
+    Jt: torch.Tensor
+    Jg: torch.Tensor
+    u_s: torch.Tensor
+    u_d: torch.Tensor
+    max_torque: torch.Tensor
+    min_torque: torch.Tensor
+    friction_coulomb: torch.Tensor
+    friction_static: torch.Tensor
+    beta_static: torch.Tensor
+    cViscous: torch.Tensor
+    reaction_wheel_model: torch.Tensor  # ReactionWheelModels
+    aOmega: torch.Tensor = field(default_factory=v3zero, init=False)
+    bOmega: torch.Tensor = field(default_factory=v3zero, init=False)
+    rWcB_B: torch.Tensor = field(default_factory=v3zero, init=False)
+    rPrimeWcB_B: torch.Tensor = field(
+        default_factory=v3zero,
+        init=False,
+    )
+    w2Hat_B: torch.Tensor = field(default_factory=v3zero, init=False)
+    w3Hat_B: torch.Tensor = field(default_factory=v3zero, init=False)
+    IRWPntWc_B: torch.Tensor = field(
+        default_factory=m33zero,
+        init=False,
+    )
+    IPrimeRWPntWc_B: torch.Tensor = field(
+        default_factory=m33zero,
+        init=False,
+    )
+    rTildeWcB_B: torch.Tensor = field(
+        default_factory=m33zero,
+        init=False,
+    )
+    mass: torch.Tensor
+    theta: torch.Tensor = field(default_factory=v3zero, init=False)
+    d: torch.Tensor = field(default_factory=zero, init=False)
+    J13: torch.Tensor = field(default_factory=zero, init=False)
+    current_torque: torch.Tensor = field(default_factory=zero, init=False)
+    omegaLimitCycle: torch.Tensor = field(
+        default_factory=lambda: torch.tensor([0.0001]),
+        init=False,
+    )
+    friction_torque: torch.Tensor = field(default_factory=zero, init=False)
+    omega_before: torch.Tensor = field(default_factory=zero, init=False)
+    max_omega: torch.Tensor
+    max_power: torch.Tensor
+    cOmega: torch.Tensor = field(default_factory=zero, init=False)
+    friction_stribeck: torch.Tensor = field(
+        default_factory=lambda: torch.tensor([False]),
+        init=False,
+    )
 
     @classmethod
-    def create(
+    def build(
         cls,
-        reaction_wheel_type: list[str],
         gsHat_B: torch.Tensor,
-        **kwargs: torch.Tensor,
-    ) -> 'ReactionWheels':
-        num_reaction_wheel = len(reaction_wheel_type)
-        assert num_reaction_wheel == gsHat_B.size(
-            -1), "inconsistency of number reaction wheel"
+        reaction_wheel_model: ReactionWheelModels = ReactionWheelModels.
+        BALANCED_WHEELS,
+        *args,
+        max_momentum: float,
+        max_power: float = -1.,  # turn off
+        beta_static: float = -1.,  # turn off
+        max_omega: float = 0.,  # turn off 
+        max_torque: float = 0.,  # turn off
+        min_torque: float = 0.,  # turn off
+        friction_coulomb: float = 0.,  # turn off
+        mass: float = 1.,
+        u_s: float = 0.,
+        u_d: float = 0.,
+        friction_static: float = 0.,
+        cViscous: float = 0.,
+        Js: float = 0.,
+        rWB_B: torch.Tensor | None = None,
+        omega: float = 0.,
+        **kwargs,
+    ) -> Self:
+        """
+        Creates an instance of the class representing a reaction wheel with specified parameters.
 
-        reaction_wheel_model = torch.full(
-            (1, num_reaction_wheel),
-            ReactionWheelModels.BALANCED_WHEELS,
-        )
-        if 'reaction_wheel_model' in kwargs:
-            reaction_wheel_model = kwargs['reaction_wheel_model']
-            assert num_reaction_wheel == reaction_wheel_model.size(
-                -1), "inconsistency of number reaction wheel"
-            assert torch.all(reaction_wheel_model == 1), \
-                "Only balanced wheel is supported now."
+        We allow to directly set max_omega, max_torque, min_torque, friction_coulomb, mass, u_s, u_d, but it's recommanded to use type specification.
 
-        use_reaction_wheel_friction = torch.zeros(
-            1,
-            num_reaction_wheel,
-            dtype=torch.bool,
-        )
-        if 'use_reaction_wheel_friction' in kwargs:
-            use_reaction_wheel_friction = kwargs['use_reaction_wheel_friction']
-            assert num_reaction_wheel == use_reaction_wheel_friction.size(
-                -1), "inconsistency of number reaction wheel"
-            assert use_reaction_wheel_friction.dtype is torch.bool, "use_reaction_wheel_friction must be a bool argument."
+    Args:
+        cls: The class type to instantiate.
+        gsHat_B (torch.Tensor): Unit vector in the body frame defining the spin axis of the reaction wheel.
+        reaction_wheel_model (ReactionWheelModels, optional): Model type for the reaction wheel. Defaults to ReactionWheelModels.BALANCED_WHEELS.
+        *args: Variable length argument list for additional parameters.
+        max_momentum (float): Maximum angular momentum capacity of the reaction wheel (Nms).
+        max_power (float, optional): Maximum power consumption of the reaction wheel (W). Defaults to -1 (disabled).
+        beta_static (float, optional): Static imbalance factor. Defaults to -1 (disabled).
+        max_omega (float, optional): Maximum angular velocity of the reaction wheel (rad/s). Defaults to 0 (disabled).
+        max_torque (float, optional): Maximum torque the reaction wheel can produce (Nm). Defaults to 0 (disabled).
+        min_torque (float, optional): Minimum torque the reaction wheel can produce (Nm). Defaults to 0 (disabled).
+        friction_coulomb (float, optional): Coulomb friction coefficient (Nm). Defaults to 0 (disabled).
+        mass (float, optional): Mass of the reaction wheel (kg). Defaults to 1.
+        u_s (float, optional): Static friction coefficient. Defaults to 0.
+        u_d (float, optional): Dynamic friction coefficient. Defaults to 0.
+        friction_static (float, optional): Static friction torque (Nm). Defaults to 0.
+        cViscous (float, optional): Viscous friction coefficient (Nms/rad). Defaults to 0.
+        Js (float, optional): Moment of inertia of the reaction wheel (kgm^2). Defaults to 0.
+        rWB_B (torch.Tensor | None, optional): Position vector from the spacecraft's center of mass to the reaction wheel in the body frame (m). Defaults to None.
+        omega (float, optional): Initial angular velocity of the reaction wheel (rad/s). Defaults to 0.
 
-        use_min_torque = torch.zeros(
-            1,
-            num_reaction_wheel,
-            dtype=torch.bool,
-        )
-        if 'use_min_torque' in kwargs:
-            use_min_torque = kwargs['use_min_torque']
-            assert num_reaction_wheel == use_min_torque.size(
-                -1), "inconsistency of number reaction wheel"
-            assert use_min_torque.dtype is torch.bool, "use_min_torque must be a bool argument."
+    Returns:
+        Self: An instance of the class initialized with the specified parameters.
+        """
+        if reaction_wheel_model != ReactionWheelModels.BALANCED_WHEELS:
+            raise ValueError("Only Balanced Wheel is supported")
 
-        use_max_torque = torch.zeros(
-            1,
-            num_reaction_wheel,
-            dtype=torch.bool,
-        )
-        if 'use_max_torque' in kwargs:
-            use_max_torque = kwargs['use_max_torque']
-            assert num_reaction_wheel == use_max_torque.size(
-                -1), "inconsistency of number reaction wheel"
-            assert use_max_torque.dtype is torch.bool, "use_max_torque must be a bool argument."
+        if beta_static == 0.:
+            raise ValueError(
+                "beta_static cannot be set to zero.  Positive turns it on, negative turns it off"
+            )
 
-        max_momentum = torch.zeros(1, num_reaction_wheel)
-        if 'max_momentum' in kwargs:
-            max_momentum = kwargs['max_momentum']
-            assert num_reaction_wheel == max_momentum.size(
-                -1), "inconsistency of number reaction wheel"
-            assert max_momentum.dtype is torch.float, "max_momentum must be a float argument."
+        if (Js > 0.) == (max_omega > 0. and max_momentum > 0.):
+            raise ValueError(
+                "Js must be set, either through direct value set or indirectly using max_momentum and max_omega"
+            )
 
-        max_power = torch.full((1, num_reaction_wheel), -1.)
-        if 'power_max' in kwargs:
-            max_power = kwargs['power_max']
-            assert num_reaction_wheel == max_power.size(
-                -1), "inconsistency of number reaction wheel"
-            assert max_power.dtype is torch.float, "power_max must be a float argument."
-
-        beta_static = torch.full((1, num_reaction_wheel), -1.)
-        if 'beta_static' in kwargs:
-            beta_static = kwargs['beta_static']
-            assert num_reaction_wheel == beta_static.size(
-                -1), "inconsistency of number reaction wheel"
-            assert beta_static.dtype is torch.float, "beta_static must be a float argument."
-            assert torch.any(
-                beta_static == 0.
-            ), "beta_static cannot be set to zero.  Positive turns it on, negative turns it off"
-
-        (
-            max_omega,
-            max_torque,
-            min_torque,
-            friction_coulomb,
-            mass,
-            u_s,
-            u_d,
-        ) = _get_type_specific_params(reaction_wheel_type, max_momentum)
-
-        if 'friction_coulomb' in kwargs:
-            friction_coulomb = kwargs['friction_coulomb']
-            assert num_reaction_wheel == friction_coulomb.size(
-                -1), "inconsistency of number reaction wheel"
-            assert friction_coulomb.dtype is torch.float, "friction_coulomb must be a float argument."
-
-        friction_static = torch.zeros(1, num_reaction_wheel)
-        if 'friction_static' in kwargs:
-            friction_static = kwargs['friction_static']
-            assert num_reaction_wheel == friction_static.size(
-                -1), "inconsistency of number reaction wheel"
-            assert friction_static.dtype is torch.float, "friction_static must be a float argument."
-
-        cViscous = torch.zeros(1, num_reaction_wheel)
-        if 'cViscous' in kwargs:
-            cViscous = kwargs['cViscous']
-            assert num_reaction_wheel == cViscous.size(
-                -1), "inconsistency of number reaction wheel"
-            assert cViscous.dtype is torch.float, "cViscous must be a float argument."
-
-        if 'min_torque' in kwargs:
-            min_torque = kwargs['min_torque']
-            assert num_reaction_wheel == min_torque.size(
-                -1), "inconsistency of number reaction wheel"
-            assert min_torque.dtype is torch.float, "min_torque must be a float argument."
-        assert not torch.any(min_torque <= 0. and use_min_torque)
-
-        if 'max_torque' in kwargs:
-            max_torque = kwargs['max_torque']
-            assert num_reaction_wheel == max_torque.size(
-                -1), "inconsistency of number reaction wheel"
-            assert max_torque.dtype is torch.float, "min_torque must be a float argument."
-        assert not torch.any(max_torque <= 0. and use_max_torque)
-
-        if 'max_omega' in kwargs:
-            max_omega = kwargs['max_omega']
-            assert num_reaction_wheel == max_omega.size(
-                -1), "inconsistency of number reaction wheel"
-            assert max_omega.dtype is torch.float, "min_torque must be a float argument."
-
-            max_omega = max_omega * constants.RPM
-
-        Js = torch.full((1, num_reaction_wheel), -1)
-        Jt = torch.zeros_like(Js)
-        Jg = torch.zeros_like(Js)
-        Js_direct_set_mask = torch.zeros_like(Js, dtype=torch.bool)
-        if 'Js' in kwargs:
-            Js = kwargs['Js']
-            assert num_reaction_wheel == Js.size(
-                -1), "inconsistency of number reaction wheel"
-            assert Js.dtype is torch.float, "Js must be a float argument."
-
-            Js_direct_set_mask = Js > 0.
-        Js_indirect_set_mask = max_omega > 0. and max_momentum > 0.
-        assert torch.all(
-            Js_direct_set_mask ^ Js_indirect_set_mask
-        ), "Js must be set, either through direct value set or indirectly using max_momentum and max_omega"
-
-        Js = torch.where(Js_direct_set_mask, Js, max_momentum / max_omega)
+        Js = max_momentum / max_omega if Js <= 0. else Js
         Jt = 0.5 * Js
         Jg = Jt
 
-        gsHat_B, w2Hat0_B, w3Hat0_B = _set_hs_hat(gs_hat_b=gsHat_B)
+        norms = gsHat_B.norm()
+        if gsHat_B.shape != torch.Size([3]):
+            raise ValueError("gsHat_B size must be torch.Size([3])")
+        if norms <= 1e-10:
+            raise ValueError("input gsHat_b are zero or near-zero")
+        gsHat_B = gsHat_B / norms
 
-        rWB_B = torch.zeros(3, num_reaction_wheel)
-        if 'rWB_B' in kwargs:
-            rWB_B = kwargs['rWB_B']
-            assert num_reaction_wheel == rWB_B.size(
-                -1), "inconsistency of number reaction wheel"
-            assert rWB_B.dim() == 2 and rWB_B.size(
-                0) == 3, "must be of size [3,n]"
-            assert rWB_B.dtype is torch.float, "rWB_B must be a float argument."
+        # Calculate w2Hat0_B and w3Hat0_B
+        x_axis = torch.tensor([1.0, 0.0, 0.0], device=gsHat_B.device)
+        w2Hat0_B = torch.cross(gsHat_B, x_axis)
+        w2_norms = torch.norm(w2Hat0_B)
+        if w2_norms < 0.01:
+            y_axis = torch.tensor([0.0, 1.0, 0.0], device=gsHat_B.device)
+            w2Hat0_B = torch.cross(gsHat_B, y_axis)
+            w2_norms = torch.norm(w2Hat0_B)
+        w2Hat0_B = w2Hat0_B / w2_norms
+        w3Hat0_B = torch.cross(gsHat_B, w2Hat0_B)
 
-        omega = torch.zeros(1, num_reaction_wheel)
-        if 'Omega' in kwargs:
-            omega = kwargs['omega']
-            assert num_reaction_wheel == omega.size(
-                -1), "inconsistency of number reaction wheel"
-            assert omega.dtype is torch.float, "omega must be a float argument."
-
-        omega = omega * constants.RPM
-        theta = torch.zeros(1, num_reaction_wheel)
-
-        friction_coulomb[~use_reaction_wheel_friction] = 0.
-        max_torque[~use_max_torque] = -1
-        min_torque[~use_min_torque] = 0.
+        rWB_B = rWB_B or torch.zeros(3)
+        if rWB_B.shape != torch.Size([3]):
+            raise ValueError('rWB_B size must be torch.Size([3])')
 
         return cls(
             rWB_B=rWB_B,
             gsHat_B=gsHat_B,
             w2Hat0_B=w2Hat0_B,
-            aOmega=torch.zeros_like(omega),
-            bOmega=torch.zeros_like(omega),
-            rWcB_B=torch.zeros_like(rWB_B),
-            rPrimeWcB_B=torch.zeros_like(rWB_B),
-            w2Hat_B=torch.zeros_like(w2Hat0_B),
-            w3Hat_B=torch.zeros_like(w3Hat0_B),
-            IRWPntWc_B=torch.zeros(3, 3, num_reaction_wheel),
-            IPrimeRWPntWc_B=torch.zeros(3, 3, num_reaction_wheel),
-            rTildeWcB_B=torch.zeros(3, 3, num_reaction_wheel),
+            w3Hat0_B=w3Hat0_B,
+            mass=torch.tensor([mass]),
+            omega=torch.tensor([omega]),
+            Js=torch.tensor([Js]),
+            Jt=torch.tensor([Jt]),
+            Jg=torch.tensor([Jg]),
+            u_s=torch.tensor([u_s]),
+            u_d=torch.tensor([u_d]),
+            max_torque=torch.tensor([max_torque]),
+            min_torque=torch.tensor([min_torque]),
+            friction_coulomb=torch.tensor([friction_coulomb]),
+            friction_static=torch.tensor([friction_static]),
+            beta_static=torch.tensor([beta_static]),
+            cViscous=torch.tensor([cViscous]),
+            max_omega=torch.tensor([max_omega]),
+            max_power=torch.tensor([max_power]),
+            reaction_wheel_model=torch.tensor([reaction_wheel_model]),
+        )
+
+    @staticmethod
+    def to_state_dict(
+            reaction_wheels: list['ReactionWheel']) -> ReactionWheelsStateDict:
+        if len(reaction_wheels) == 0:
+            raise ValueError("Reaction Wheel list cannot be empty")
+
+        state_dict = dict()
+        for field in fields(ReactionWheel):
+            attr = field.name
+            values = [
+                getattr(reaction_wheel, attr)
+                for reaction_wheel in reaction_wheels
+            ]
+            value = torch.stack(values, dim=-1)
+            state_dict[attr] = value
+
+        return state_dict
+
+
+class HoneywellHR12Large(ReactionWheel):
+
+    @classmethod
+    def create(
+        cls,
+        *args,
+        mass: float = 9.5,
+        u_s: float = 4.4e-6,
+        u_d: float = 9.1e-7,
+        max_omega: float = 6000. * constants.RPM,
+        max_torque: float = 0.2,
+        min_torque: float = 0.00001,
+        friction_coulomb: float = 0.0005,
+        **kwargs,
+    ) -> Self:
+        kwargs.pop('max_momentum')
+        return super().create(
+            *args,
+            max_momentum=50.,
             mass=mass,
-            theta=theta,
-            omega=omega,
-            Js=Js,
-            Jt=Jt,
-            Jg=Jg,
-            U_s=u_s,
+            u_s=u_s,
             u_d=u_d,
-            d=torch.zeros_like(Js),
-            J13=torch.zeros_like(Js),
-            current_torque=torch.zeros_like(max_torque),
+            max_omega=max_omega,
             max_torque=max_torque,
             min_torque=min_torque,
             friction_coulomb=friction_coulomb,
-            friction_static=friction_static,
-            beta_static=beta_static,
-            cViscous=cViscous,
-            omegaLimitCycle=torch.zeros_like(omega),
-            friction_torque=torch.zeros(friction_static),
-            omega_before=torch.zeros_like(omega),
+            **kwargs,
+        )
+
+
+class HoneywellHR12Medium(ReactionWheel):
+
+    @classmethod
+    def create(
+        cls,
+        *args,
+        mass: float = 7.0,
+        u_s: float = 2.4e-6,
+        u_d: float = 4.6e-7,
+        max_omega: float = 6000. * constants.RPM,
+        max_torque: float = 0.2,
+        min_torque: float = 0.00001,
+        friction_coulomb: float = 0.0005,
+        **kwargs,
+    ) -> Self:
+        kwargs.pop('max_momentum')
+        return super().create(
+            *args,
+            max_momentum=25.,
+            mass=mass,
+            u_s=u_s,
+            u_d=u_d,
             max_omega=max_omega,
-            max_power=max_power,
-            cOmega=torch.zeros_like(omega),
-            reaction_wheel_model=reaction_wheel_model,
-            friction_stribeck=torch.zeros_like(
-                friction_static,
-                dtype=torch.bool,
-            ),
+            max_torque=max_torque,
+            min_torque=min_torque,
+            friction_coulomb=friction_coulomb,
+            **kwargs,
         )
 
 
-def _get_type_specific_params(
-    reaction_wheel_type: list[str],
-    max_momentum: torch.Tensor,
-) -> tuple[
-        torch.Tensor,
-        torch.Tensor,
-        torch.Tensor,
-        torch.Tensor,
-        torch.Tensor,
-        torch.Tensor,
-        torch.Tensor,
-]:
-    type_specific_params_func = [
-        reaction_wheel_type_registry.get_type(type_name)
-        for type_name in reaction_wheel_type
-    ]
-    type_specific_params = [
-        func(max_momentum[..., i])
-        for i, func in enumerate(type_specific_params_func)
-    ]
+class HoneywellHR12Small(ReactionWheel):
 
-    return tuple(
-        torch.cat([tensors[i] for tensors in type_specific_params], dim=-1)
-        for i in range(len(type_specific_params[0])))
-
-
-def _set_hs_hat(
-    gs_hat_b: torch.Tensor, ) -> tuple[
-        torch.Tensor,
-        torch.Tensor,
-        torch.Tensor,
-    ]:
-    norms = torch.norm(gs_hat_b, dim=0, keepdim=True)
-    valid_mask = norms > 1e-10
-
-    if not torch.all(valid_mask):
-        raise ValueError(
-            f"Error: {torch.sum(~valid_mask)} input vectors are zero or near-zero"
+    @classmethod
+    def create(
+        cls,
+        *args,
+        mass: float = 6.0,
+        u_s: float = 1.5e-6,
+        u_d: float = 2.2e-7,
+        max_omega: float = 6000. * constants.RPM,
+        max_torque: float = 0.2,
+        min_torque: float = 0.00001,
+        friction_coulomb: float = 0.0005,
+        **kwargs,
+    ) -> Self:
+        kwargs.pop('max_momentum')
+        return super().create(
+            *args,
+            max_momentum=12.,
+            mass=mass,
+            u_s=u_s,
+            u_d=u_d,
+            max_omega=max_omega,
+            max_torque=max_torque,
+            min_torque=min_torque,
+            friction_coulomb=friction_coulomb,
+            **kwargs,
         )
-
-    gs_hat_b = gs_hat_b / norms
-
-    x_axis = torch.tensor([1.0, 0.0, 0.0],
-                          device=gs_hat_b.device).reshape(-1, 1)
-    w2Hat0_B = torch.cross(gs_hat_b, x_axis.expand_as(gs_hat_b), dim=0)
-    w2_norms = torch.norm(w2Hat0_B, dim=0, keepdim=True)
-
-    y_axis = torch.tensor([0.0, 1.0, 0.0],
-                          device=gs_hat_b.device).reshape(-1, 1)
-    alternative_w2 = torch.cross(gs_hat_b, y_axis.expand_as(gs_hat_b), dim=0)
-    switch_mask = w2_norms < 0.01
-
-    w2Hat0_B = torch.where(switch_mask, alternative_w2, w2Hat0_B)
-    w2_norms = torch.where(switch_mask,
-                           torch.norm(alternative_w2, dim=0, keepdim=True),
-                           w2_norms)
-
-    w2Hat0_B = w2Hat0_B / w2_norms
-
-    w3Hat0_B = torch.cross(gs_hat_b, w2Hat0_B, dim=0)
-
-    return gs_hat_b, w2Hat0_B, w3Hat0_B

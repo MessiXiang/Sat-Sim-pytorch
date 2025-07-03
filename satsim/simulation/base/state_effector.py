@@ -94,7 +94,7 @@ class StateEffectorMixin(ABC, Generic[T]):
         self,
         state_dict: T,
         rotAngMomPntCContr_B: torch.Tensor,
-        rotEnergyContr: float,
+        rotEnergyContr: torch.Tensor,
         omega_BN_B: torch.Tensor,
     ) -> T:
         return state_dict

@@ -91,8 +91,8 @@ namespace encoder {
             size
         );
         
-        TORCH_CHECK(!cudaGetLastError());
-        TORCH_CHECK(!cudaDeviceSynchronize());
+        TORCH_CHECK(cudaGetLastError() == CUDA_SUCCESS);
+        TORCH_CHECK(cudaDeviceSynchronize() == CUDA_SUCCESS);
         
         return {new_speeds, new_remaining_clicks};
     }

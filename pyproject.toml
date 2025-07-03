@@ -13,7 +13,7 @@ readme = "README.md"
 dynamic = ["version","dependencies"]
 
 [tool.pytest.ini_options]
-testpaths = ["satsim/simulation/*/unit_test/", "tests/"]
+testpaths = ["satsim/*/*/unit_test/", "tests/"]
 pythonpath = ["src"]
 
 [project.urls]
