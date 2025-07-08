@@ -7,7 +7,7 @@ from satsim.architecture import Module
 
 from ..base import BackSubMatrices, StateEffectorMixin, StateEffectorStateDict
 from .data import ReactionWheelDynamicParams
-from .reaction_wheels import ReactionWheelsStateDict
+from .reaction_wheels import ReactionWheelsStateDict, ReactionWheel
 
 
 class ReactionWheelStateEffectorStateDict(StateEffectorStateDict):
@@ -20,11 +20,19 @@ class ReactionWheelStateEffector(
         StateEffectorMixin[ReactionWheelStateEffectorStateDict],
 ):
 
+    def __init__(
+        self,
+        reaction_wheels: list[ReactionWheel] = None,
+    ) -> None:
+        self.reaction_wheels = reaction_wheels
+
     def reset(self) -> ReactionWheelStateEffectorStateDict:
         state_dict = super().reset()
 
         state_effector_state_dict = super().state_effector_reset()
         state_dict.update(state_effector_state_dict)
+        state_dict['reaction_wheels'] = ReactionWheel.state_dict(
+            self.reaction_wheels)
         return state_dict
 
     def link_in_states(self, dynamic_params: ReactionWheelDynamicParams):
@@ -87,7 +95,7 @@ class ReactionWheelStateEffector(
         delta_omega = omega - omega_before
         sign_of_omega = torch.sign(omega)
         sign_of_delta_omega = torch.sign(delta_omega)
-        reaction_wheels['friction_stribeck'] = friction_stribeck or \
+        friction_stribeck = friction_stribeck or \
             friction_stribeck_mask and \
             sign_of_delta_omega == sign_of_omega and \
             beta_static > 0
@@ -130,6 +138,8 @@ class ReactionWheelStateEffector(
                 current_torque + friction_torque) + Js * omega * torch.cross(
                     omega_BN_B.unsqueeze(1), gsHat_B, dim=0)
 
+        reaction_wheels['friction_stribeck'] = friction_stribeck
+
         return state_dict, back_substitution_contribution
 
     def compute_derivatives(
@@ -170,19 +180,6 @@ class ReactionWheelStateEffector(
 
         return rotAngMomPntCContr_B, rotEnergyContr
 
-    def get_state_output(
-        self,
-        state_dict: ReactionWheelStateEffectorStateDict,
-    ) -> tuple[
-            ReactionWheelStateEffectorStateDict,
-            tuple[torch.Tensor],
-    ]:
-        dynamic_params = state_dict['dynamic_params']
-        reaction_wheels = state_dict['reaction_wheels']
-
-        reaction_wheels['omega'] = dynamic_params['omega']
-        return state_dict, (reaction_wheels['omega'], )
-
     def forward(
         self,
         state_dict: ReactionWheelStateEffectorStateDict,
@@ -193,6 +190,41 @@ class ReactionWheelStateEffector(
             ReactionWheelStateEffectorStateDict,
             tuple[torch.Tensor],
     ]:
+        """Processes the reaction wheel state and applies motor torque with constraints.
+
+        This method updates the reaction wheel state dictionary by applying the provided motor torque,
+        subject to constraints such as torque saturation, minimum torque threshold, power limits, and
+        speed saturation. If no motor torque is provided, the method returns the unchanged state dictionary
+        and a zero tensor. The method modifies the `reaction_wheels` dictionary within `state_dict` to
+        store the applied torque and previous angular velocity, and updates the angular velocity based on
+        dynamic parameters.
+
+        Args:
+            state_dict (ReactionWheelStateEffectorStateDict): Dictionary containing reaction wheel state,
+                including 'reaction_wheels' with fields 'max_torque', 'min_torque', 'max_power', 'omega',
+                'max_omega', and 'dynamic_params' with 'omega'.
+            *args: Variable length argument list (not used).
+            motor_torque (torch.Tensor | None, optional): Motor torque to apply to the reaction wheels.
+                If None, no torque is applied, and a zero tensor is returned in the output tuple.
+                Defaults to None.
+            **kwargs: Additional keyword arguments (not used).
+
+        Returns:
+            tuple[ReactionWheelStateEffectorStateDict, tuple[torch.Tensor]]:
+                - The updated `state_dict` with modified 'reaction_wheels' dictionary, including
+                'current_torque' (applied torque), 'omega_before' (previous angular velocity), and
+                updated 'omega' from dynamic parameters.
+                - A tuple containing a single zero tensor with the same shape as 'omega', representing
+                additional output (e.g., torque applied or residuals).
+
+        Notes:
+            - Torque constraints include:
+            - **Torque saturation**: Clamps torque to [-max_torque, max_torque] where max_torque > 0.
+            - **Minimum torque**: Sets torque to 0 if its absolute value is below min_torque.
+            - **Power saturation**: Limits torque to max_power / |omega| when power exceeds max_power.
+            - **Speed saturation**: Sets torque to 0 if |omega| >= max_omega and torque increases speed.
+            - The method assumes 'omega' in 'dynamic_params' is precomputed for updating 'omega'.
+        """
         reaction_wheels = state_dict['reaction_wheels']
         max_torque = reaction_wheels['max_torque']
         min_torque = reaction_wheels['min_torque']

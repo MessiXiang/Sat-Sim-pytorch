@@ -21,40 +21,27 @@ class ReactionWheelsStateDict(TypedDict):
     gsHat_B: torch.Tensor  # [3]
     w2Hat0_B: torch.Tensor  # [3]
     w3Hat0_B: torch.Tensor  # [3]
-    aOmega: torch.Tensor  # [3]
-    bOmega: torch.Tensor  # [3]
-    rWcB_B: torch.Tensor  # [3]
-    rPrimeWcB_B: torch.Tensor  # [3]
-    w2Hat_B: torch.Tensor  # [3]
-    w3Hat_B: torch.Tensor  # [3]
-    IRWPntWc_B: torch.Tensor  # [3,3]
-    IPrimeRWPntWc_B: torch.Tensor  # [3,3]
-    rTildeWcB_B: torch.Tensor  # [3,3]
-    mass: torch.Tensor
-    theta: torch.Tensor
     omega: torch.Tensor
     Js: torch.Tensor
     Jt: torch.Tensor
     Jg: torch.Tensor
     u_s: torch.Tensor
     u_d: torch.Tensor
-    d: torch.Tensor
-    J13: torch.Tensor
-    current_torque: torch.Tensor
     max_torque: torch.Tensor
     min_torque: torch.Tensor
     friction_coulomb: torch.Tensor
     friction_static: torch.Tensor
     beta_static: torch.Tensor
     cViscous: torch.Tensor
+    reaction_wheel_model: torch.Tensor  # ReactionWheelModels
+    mass: torch.Tensor
+    current_torque: torch.Tensor
     omegaLimitCycle: torch.Tensor
     friction_torque: torch.Tensor
     omega_before: torch.Tensor
     max_omega: torch.Tensor
     max_power: torch.Tensor
-    cOmega: torch.Tensor
-    reaction_wheel_model: torch.Tensor  # ReactionWheelModels
-    friction_stribeck: torch.Tensor  # bool
+    friction_stribeck: torch.Tensor
 
 
 zero = lambda: torch.zeros(1)
@@ -81,31 +68,7 @@ class ReactionWheel:
     beta_static: torch.Tensor
     cViscous: torch.Tensor
     reaction_wheel_model: torch.Tensor  # ReactionWheelModels
-    aOmega: torch.Tensor = field(default_factory=v3zero, init=False)
-    bOmega: torch.Tensor = field(default_factory=v3zero, init=False)
-    rWcB_B: torch.Tensor = field(default_factory=v3zero, init=False)
-    rPrimeWcB_B: torch.Tensor = field(
-        default_factory=v3zero,
-        init=False,
-    )
-    w2Hat_B: torch.Tensor = field(default_factory=v3zero, init=False)
-    w3Hat_B: torch.Tensor = field(default_factory=v3zero, init=False)
-    IRWPntWc_B: torch.Tensor = field(
-        default_factory=m33zero,
-        init=False,
-    )
-    IPrimeRWPntWc_B: torch.Tensor = field(
-        default_factory=m33zero,
-        init=False,
-    )
-    rTildeWcB_B: torch.Tensor = field(
-        default_factory=m33zero,
-        init=False,
-    )
     mass: torch.Tensor
-    theta: torch.Tensor = field(default_factory=v3zero, init=False)
-    d: torch.Tensor = field(default_factory=zero, init=False)
-    J13: torch.Tensor = field(default_factory=zero, init=False)
     current_torque: torch.Tensor = field(default_factory=zero, init=False)
     omegaLimitCycle: torch.Tensor = field(
         default_factory=lambda: torch.tensor([0.0001]),
@@ -115,7 +78,6 @@ class ReactionWheel:
     omega_before: torch.Tensor = field(default_factory=zero, init=False)
     max_omega: torch.Tensor
     max_power: torch.Tensor
-    cOmega: torch.Tensor = field(default_factory=zero, init=False)
     friction_stribeck: torch.Tensor = field(
         default_factory=lambda: torch.tensor([False]),
         init=False,
@@ -237,7 +199,7 @@ class ReactionWheel:
         )
 
     @staticmethod
-    def to_state_dict(
+    def state_dict(
             reaction_wheels: list['ReactionWheel']) -> ReactionWheelsStateDict:
         if len(reaction_wheels) == 0:
             raise ValueError("Reaction Wheel list cannot be empty")
@@ -258,29 +220,21 @@ class ReactionWheel:
 class HoneywellHR12Large(ReactionWheel):
 
     @classmethod
-    def create(
+    def build(
         cls,
         *args,
-        mass: float = 9.5,
-        u_s: float = 4.4e-6,
-        u_d: float = 9.1e-7,
-        max_omega: float = 6000. * constants.RPM,
-        max_torque: float = 0.2,
-        min_torque: float = 0.00001,
-        friction_coulomb: float = 0.0005,
         **kwargs,
     ) -> Self:
-        kwargs.pop('max_momentum')
-        return super().create(
+        return super().build(
             *args,
             max_momentum=50.,
-            mass=mass,
-            u_s=u_s,
-            u_d=u_d,
-            max_omega=max_omega,
-            max_torque=max_torque,
-            min_torque=min_torque,
-            friction_coulomb=friction_coulomb,
+            mass=9.5,
+            u_s=4.4e-6,
+            u_d=9.1e-7,
+            max_omega=6000. * constants.RPM,
+            max_torque=0.2,
+            min_torque=0.00001,
+            friction_coulomb=0.0005,
             **kwargs,
         )
 
@@ -288,7 +242,7 @@ class HoneywellHR12Large(ReactionWheel):
 class HoneywellHR12Medium(ReactionWheel):
 
     @classmethod
-    def create(
+    def build(
         cls,
         *args,
         mass: float = 7.0,
@@ -301,7 +255,7 @@ class HoneywellHR12Medium(ReactionWheel):
         **kwargs,
     ) -> Self:
         kwargs.pop('max_momentum')
-        return super().create(
+        return super().build(
             *args,
             max_momentum=25.,
             mass=mass,
@@ -318,7 +272,7 @@ class HoneywellHR12Medium(ReactionWheel):
 class HoneywellHR12Small(ReactionWheel):
 
     @classmethod
-    def create(
+    def build(
         cls,
         *args,
         mass: float = 6.0,
@@ -331,7 +285,7 @@ class HoneywellHR12Small(ReactionWheel):
         **kwargs,
     ) -> Self:
         kwargs.pop('max_momentum')
-        return super().create(
+        return super().build(
             *args,
             max_momentum=12.,
             mass=mass,

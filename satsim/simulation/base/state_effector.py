@@ -64,16 +64,6 @@ class StateEffectorMixin(ABC, Generic[T]):
             dcm_BP=torch.eye(3, 3),
         )
 
-    @abstractmethod
-    def get_state_output(
-        self,
-        state_dict: T,
-    ) -> tuple[
-            T,
-            tuple[Any, ...],
-    ]:
-        pass
-
     def update_effector_mass(
         self,
         state_dict: T,
@@ -96,10 +86,10 @@ class StateEffectorMixin(ABC, Generic[T]):
         rotAngMomPntCContr_B: torch.Tensor,
         rotEnergyContr: torch.Tensor,
         omega_BN_B: torch.Tensor,
-    ) -> T:
-        return state_dict
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        return rotAngMomPntCContr_B, rotEnergyContr
 
-    def modifyStates(self, state_dict: T) -> T:
+    def modify_states(self, state_dict: T) -> T:
         return state_dict
 
     def calcForceTorqueOnBody(
@@ -109,13 +99,8 @@ class StateEffectorMixin(ABC, Generic[T]):
     ) -> T:
         return state_dict
 
-    @abstractmethod
     def register_states(self, state_dict: T) -> T:
-        pass
-
-    @abstractmethod
-    def link_in_states(self, states) -> None:
-        pass
+        return state_dict
 
     @abstractmethod
     def compute_derivatives(
@@ -130,7 +115,7 @@ class StateEffectorMixin(ABC, Generic[T]):
     def prependSpacecraftNameToStates(self, state_dict: T) -> T:
         return state_dict
 
-    # Temporarily saved for code comprehension, be done by change state dict
+    # Temporarily left for code comprehension
     def receiveMotherSpacecraftData(
         self,
         rSC_BP_P: torch.Tensor,
