@@ -1,265 +1,232 @@
 __all__ = [
-    'GravityEffector', 'GravBodyData', 'PlanetState',
-    'GravityEffectorStateDict', 'GravBodyDataStateDict'
+    'GravityEffector',
+    'Ephemeris',
+    'GravityEffectorStateDict',
 ]
 
-from dataclasses import dataclass
-from typing import List, Optional
+from typing import Optional, NotRequired
 import torch
 from torch import Tensor
 from typing_extensions import TypedDict
-
-from .gravityModel import GravityModel, PointMassGravityModel
-from satsim.architecture import Module, Timer
+from satsim.architecture import Module
 
 
-@dataclass
-class PlanetBodyStateDict(TypedDict):
-    """行星状态数据结构"""
-    position_vector: Tensor
-    velocity_vector: Tensor
-    J2000_2_planet_fixed: Tensor
-    J2000_2_planet_fixed_dot: Tensor
-
-
-@dataclass
-class GravBodyData:
-    """引力体数据类
+class Ephemeris(TypedDict):
     """
-    mu: float = 0.0
-    rad_equator: float = 0.0
-    radius_ratio: float = 1.0
-    gravity_model: Optional[GravityModel] = None
-
-    # 引力模型
-    gravity_model = gravity_model or PointMassGravityModel()
-
-    local_planet: PlanetBodyStateDict = PlanetBodyStateDict(
-        position_vector=torch.zeros(3),
-        velocity_vector=torch.zeros(3),
-        J2000_2_planet_fixed=torch.eye(3),
-        J2000_2_planet_fixed_dot=torch.zeros(3, 3),
-    )
-
-    def compute_gravity_inertial(self,
-                                 r_inertial: Tensor,
-                                 dt: float = 0.0) -> Tensor:
-        """计算惯性系中的引力加速度
-
-        Args:
-            r_inertial: 惯性位置向量
-            dt: 时间步长
-        Returns:
-            引力加速度向量
-        """
-        # 更新姿态矩阵
-        direction_cos_matrix_inertial_2_planet_fixed = self.local_planet.J2000_2_planet_fixed
-        if torch.allclose(direction_cos_matrix_inertial_2_planet_fixed,
-                          torch.zeros(3, 3)):
-            direction_cos_matrix_inertial_2_planet_fixed = torch.eye(3)
-
-        direction_cos_matrix_inertial_2_planet_fixed_dot = self.local_planet.J2000_2_planet_fixed_dot
-        direction_cos_matrix_inertial_2_planet_fixed = direction_cos_matrix_inertial_2_planet_fixed + direction_cos_matrix_inertial_2_planet_fixed_dot * dt
-
-        # 用赋值保持梯度
-        self.local_planet.J2000_2_planet_fixed = direction_cos_matrix_inertial_2_planet_fixed
-        self.local_planet.J2000_2_planet_fixed_dot = direction_cos_matrix_inertial_2_planet_fixed_dot
-
-        # 计算行星固连系中的位置
-        direction_cos_matrix_planet_fixed_2_inertial = direction_cos_matrix_inertial_2_planet_fixed.T
-        r_planet_fixed = direction_cos_matrix_planet_fixed_2_inertial @ r_inertial
-
-        # 计算引力场
-        grav_planet_fixed = self.gravity_model.compute_field(r_planet_fixed)
-
-        # 转换回惯性系
-        return direction_cos_matrix_inertial_2_planet_fixed @ grav_planet_fixed
+    All Tensor should be of shape [batch_size, num_body, *value_shape]. First two dimension can be ommited or set to 1
+    
+    """
+    position_in_inertial: Tensor  # position vector
+    velocity_in_inertial: Tensor  # velocity vector
+    J2000_2_planet_fixed: Tensor  # DCM from J2000 to planet-fixed
+    J2000_2_planet_fixed_dot: Tensor  # DCM derivative
 
 
-# 需要吗
 class GravityEffectorStateDict(TypedDict):
-    """引力效应器状态字典"""
-    grav_bodies: List[GravBodyData]  # 引力体列表
-    central_body: Optional[GravBodyData]  # 中心天体
+    planet_bodies_ephemeris: Ephemeris | None  # list of Ephemeris of planet bodies (non central body)
+    central_body_ephemeris: Ephemeris | None  # Ephemeris of central body
 
 
 class GravityEffector(Module[GravityEffectorStateDict]):
-    """引力效应器类
-    """
 
     def __init__(
         self,
-        timer: Timer,
-        grav_bodies: List[GravBodyData],
-        central_body: GravBodyData | None = None,
+        *args,
+        central_body_mu: float,
+        planet_bodies_mu: list[float] | None = None,
+        planet_bodies_ephemeris_init: Ephemeris
+        | None = None,
+        central_body_ephemeris_init: Ephemeris
+        | None = None,
+        **kwargs,
     ):
-        super().__init__()
 
-        self.grav_bodies = grav_bodies or []
-        self.central_body: Optional[GravBodyData] = central_body
+        super().__init__(*args, **kwargs)
+
+        if planet_bodies_mu is None:
+            planet_bodies_mu = []
+
+        self.register_buffer(
+            'planet_bodies_mu',
+            torch.tensor(planet_bodies_mu),
+            persistent=False,
+        )
+        self.register_buffer(
+            'central_body_mu',
+            torch.tensor(central_body_mu),
+            persistent=False,
+        )
+
+        self.planet_bodies_init = planet_bodies_ephemeris_init
+        self.central_body_init = central_body_ephemeris_init
+
+    @property
+    def num_planet_bodies(self):
+        planet_bodies_mu = self.get_buffer('planet_bodies_mu')
+        return planet_bodies_mu.size(-1)
+
+    @property
+    def all_grav_body_mu(self):
+        planet_bodies_mu = self.get_buffer('planet_bodies_mu')
+        central_body_mu = self.get_buffer('central_body_mu')
+        return torch.cat([planet_bodies_mu, central_body_mu], dim=-2)
 
     def reset(self) -> GravityEffectorStateDict:
-        """重置状态"""
         state_dict = super().reset()
-
-        # 初始化所有引力体
-        for body in self.grav_bodies:
-            body.gravity_model.initialize_parameters(body)
-
         state_dict.update({
-            'grav_bodies': self.grav_bodies,
-            'central_body': self.central_body,
+            'planet_bodies': self.planet_bodies_init,
+            'central_body': self.central_body_init,
         })
-
         return state_dict
 
-    def forward(
-        self,
-        state_dict,
-        *args,
-        grav_bodies_ephemerics: list[PlanetBodyStateDict],
-        central_body_ephemeric: PlanetBodyStateDict | None,
-        **kwargs,
-    ) -> PlanetBodyStateDict:
-        # 重置中心天体
-        central_body = state_dict['central_body']
-        grav_bodies = state_dict['grav_bodies']
-
-        # 更新所有引力体
-        for body in self.grav_bodies:
-            # body.load_ephemeris()
-
-            if not body.is_central_body:
-                continue
-
-            if central_body:
-                raise ValueError(
-                    "Specified two central bodies at the same time")
-            else:
-                central_body = body
-
-        return self.central_body.local_planet
-
     def compute_gravity_field(
-            self, r_spacecraft2frame_inertial: Tensor,
-            rDot_spacecraft2frame_inertial: Tensor) -> Tensor:
-        """计算引力场
-        
-        Args:
-            r_spacecraft2frame_inertial: 航天器相对于参考系的位置向量 (spacecraft relative to frame, in inertial frame)
-            rDot_spacecraft2frame_inertial: 航天器相对于参考系的速度向量 (spacecraft velocity relative to frame, in inertial frame)
-            
-        Returns:
-            rDotDot_spacecraft2frame_inertial: 航天器相对于参考系的引力加速度向量
-        """
-        if self.time_corr is None:
-            system_clock = 0.0
-        else:
-            system_clock = float(self.time_corr[0])
+        self,
+        state_dict: GravityEffectorStateDict,
+        position_spacecraft_wrt_central_body_in_inertial:
+        Tensor,  # [b, num_spacecraft, 3]
+        central_body_ephemeris: Ephemeris,
+        planet_body_ephemeris: Ephemeris | None = None,
+    ) -> Tensor:
+        position_central_body_in_inertial = self._calculate_next_position(
+            central_body_ephemeris)  # [b, 1, 3]
+        position_spacecraft_in_inertial = position_spacecraft_wrt_central_body_in_inertial + position_central_body_in_inertial
 
-        # 确定参考系
-        if self.central_body:
-            r_center2inertial_inertial = self._get_euler_stepped_grav_body_position(
-                self.central_body)
-            r_spacecraft2inertial_inertial = r_spacecraft2frame_inertial + r_center2inertial_inertial
-        else:
-            r_spacecraft2inertial_inertial = r_spacecraft2frame_inertial
+        acceleration_spacecraft_wrt_central_body_in_inertial = torch.zeros_like(
+            position_spacecraft_wrt_central_body_in_inertial)
 
-        # 计算总引力加速度
-        rDotDot_spacecraft2frame_inertial = torch.zeros(3)
+        position_planet_in_inertial = self._calculate_next_position(
+            planet_body_ephemeris)  # [b, num_planet,3]
+        all_body_next_position_in_inertial = torch.cat(
+            [position_planet_in_inertial, position_central_body_in_inertial],
+            dim=-2,
+        )
+        position_spacecraft_wrt_planet_in_inerital = position_spacecraft_in_inertial.unsqueeze(
+            -2) - all_body_next_position_in_inertial.unsqueeze(
+                -3)  # [b, num_spacecraft, num_planet + 1, 3]
 
-        for body in self.grav_bodies:
-            # 计算行星位置
-            r_planet2inertial_inertial = self._get_euler_stepped_grav_body_position(
-                body)
-            r_spacecraft2planet_inertial = r_spacecraft2inertial_inertial - r_planet2inertial_inertial
+        # Subtract acceleration of central body due to other bodies to
+        # get relative acceleration of spacecraft. See Ballado on
+        # "Three-body and n-body Equations"
+        acceleration_spacecraft_wrt_central_body_in_inertial = acceleration_spacecraft_wrt_central_body_in_inertial + self.compute_point_mass_field(
+            self.get_buffer('planet_bodies_mu'),  # [b, num_planet, 1]
+            (position_planet_in_inertial -
+             position_central_body_in_inertial).unsqueeze(-4),
+        )  # [b, 1, 3]
 
-            # 处理相对动力学
-            if self.central_body and not body.is_central_body:
-                # 减去中心天体由于其他天体产生的加速度
-                rDotDot_spacecraft2frame_inertial = rDotDot_spacecraft2frame_inertial + body.compute_gravity_inertial(
-                    r_planet2inertial_inertial - r_center2inertial_inertial,
-                    self._timer.dt)
+        acceleration_spacecraft_wrt_central_body_in_inertial = acceleration_spacecraft_wrt_central_body_in_inertial + self.compute_point_mass_field(
+            self.all_grav_body_mu,
+            position_spacecraft_wrt_planet_in_inerital,
+        )
 
-            # 计算引力加速度
-            rDotDot_spacecraft2frame_inertial = rDotDot_spacecraft2frame_inertial + body.compute_gravity_inertial(
-                r_spacecraft2planet_inertial, self._timer.dt)
+        return acceleration_spacecraft_wrt_central_body_in_inertial
 
-        return rDotDot_spacecraft2frame_inertial
-
-    # input -> output
     def update_inertial_position_and_velocity(
-            self, r_spacecraft2frame_inertial: Tensor,
-            rDot_spacecraft2frame_inertial: Tensor) -> None:
-        """更新惯性位置和速度
-        
-        Args:
-            r_spacecraft2frame_inertial: 航天器相对于参考系的位置向量 (spacecraft relative to frame, in inertial frame)
-            rDot_spacecraft2frame_inertial: 航天器相对于参考系的速度向量 (spacecraft velocity relative to frame, in inertial frame)
-        """
-        if self.central_body:
-            r_center2inertial_inertial = self._get_euler_stepped_grav_body_position(
-                self.central_body)
+        self,
+        state_dict: GravityEffectorStateDict,
+        r_spacecraft2frame_inertial: Tensor,
+        rDot_spacecraft2frame_inertial: Tensor,
+    ) -> tuple[Tensor, Tensor]:
+
+        inertial_position_property = torch.zeros_like(
+            r_spacecraft2frame_inertial)
+        inertial_velocity_property = torch.zeros_like(
+            rDot_spacecraft2frame_inertial)
+
+        if state_dict['central_body'] is not None:
+            r_center2inertial_inertial = self._calculate_next_position(
+                state_dict['central_body'])
             inertial_position_property = r_center2inertial_inertial + r_spacecraft2frame_inertial
-            inertial_velocity_property = self.central_body.local_planet.velocity_vector + rDot_spacecraft2frame_inertial
+            inertial_velocity_property = state_dict['central_body'][
+                'velocity_in_inertial'] + rDot_spacecraft2frame_inertial
         else:
             inertial_position_property = r_spacecraft2frame_inertial
             inertial_velocity_property = rDot_spacecraft2frame_inertial
 
         return inertial_position_property, inertial_velocity_property
 
-    def _get_euler_stepped_grav_body_position(
-            self, body_data: GravBodyData) -> Tensor:
-        """使用欧拉积分计算行星位置"""
-        # if self.time_corr is None:
-        #     system_clock = 0.0
-        # else:
-        #     system_clock = float(self.time_corr[0])
-        # dt = system_clock - body_data.time_written
-
-        dt = self.timer.dt
-        r_planet2inertial_inertial = body_data.local_planet.position_vector + body_data.local_planet.velocity_vector * dt
-
-        return r_planet2inertial_inertial
+    def _calculate_next_position(
+        self,
+        ephemeris: Ephemeris,
+    ) -> Tensor:
+        """Euler integration to compute planet position"""
+        dt = self._timer.dt
+        return ephemeris[
+            'position_in_inertial'] + ephemeris['velocity_in_inertial'] * dt
 
     def update_energy_contributions(
-            self, r_spacecraft2frame_inertial: Tensor) -> float:
-        """计算势能贡献
-        
-        Args:
-            r_spacecraft2frame_inertial: 航天器相对于参考系的位置向量
-            
-        Returns:
-            orbit_potential_energy_contribution: 轨道势能贡献
-        """
-        # if self.time_corr is None:
-        #     system_clock = 0.0
-        # else:
-        #     system_clock = float(self.time_corr[0])
+            self, state_dict: GravityEffectorStateDict,
+            r_spacecraft2frame_inertial: Tensor) -> float:
 
-        # 确定参考系
-        if self.central_body:
-            r_center2inertial_inertial = self._get_euler_stepped_grav_body_position(
-                self.central_body)
+        orbit_potential_energy_contribution = torch.tensor(
+            0.0, device=r_spacecraft2frame_inertial.device)
+
+        if state_dict['central_body'] is not None:
+            r_center2inertial_inertial = self._calculate_next_position(
+                state_dict['central_body'])
             r_spacecraft2inertial_inertial = r_spacecraft2frame_inertial + r_center2inertial_inertial
+
+            orbit_potential_energy_contribution = orbit_potential_energy_contribution + self.compute_point_mass_potential(
+                self.planet_bodies_mu[-1], r_spacecraft2frame_inertial)
         else:
-            r_spacecraft2inertial_inertial = r_spacecraft2frame_inertial  # frame为惯性系
+            r_spacecraft2inertial_inertial = r_spacecraft2frame_inertial
 
-        orbit_potential_energy_contribution = torch.tensor(0.)
-
-        for body in self.grav_bodies:
-            r_planet2inertial_inertial = self._get_euler_stepped_grav_body_position(
-                body)
-            r_spacecraft2planet_inertial = r_spacecraft2inertial_inertial - r_planet2inertial_inertial
-
-            if self.central_body and not body.is_central_body:
-                # 中心天体在当前行星场中的势能（相对动力学修正）
+        for index, planet_body in enumerate(state_dict['planet_bodies']):
+            r_planet2inertial_inertial = self._calculate_next_position(
+                planet_body)
+            # relative dynamics correction
+            if state_dict['central_body'] is not None:
                 r_planet2center_inertial = r_planet2inertial_inertial - r_center2inertial_inertial
-                orbit_potential_energy_contribution = orbit_potential_energy_contribution + body.gravity_model.compute_potential_energy(
-                    r_planet2center_inertial)
-
-            # 航天器在当前行星场中的势能
-            orbit_potential_energy_contribution = orbit_potential_energy_contribution + body.gravity_model.compute_potential_energy(
-                r_spacecraft2planet_inertial)
+                orbit_potential_energy_contribution = orbit_potential_energy_contribution + self.compute_point_mass_potential(
+                    self.planet_bodies_mu[index], r_planet2center_inertial)
+            # potential energy in the current planet field
+            r_spacecraft2planet_inertial = r_spacecraft2inertial_inertial - r_planet2inertial_inertial
+            orbit_potential_energy_contribution = orbit_potential_energy_contribution + self.compute_point_mass_potential(
+                self.planet_bodies_mu[index], r_spacecraft2planet_inertial)
 
         return orbit_potential_energy_contribution
+
+    def compute_gravity_inertial(
+        self,
+        body: Ephemeris,
+        mu_body: float,
+        position_wrt_planet_in_inertial: Tensor,
+    ) -> Tensor:
+        direction_cos_matrix_inertial_2_planet_fixed = body[
+            'J2000_2_planet_fixed']
+
+        direction_cos_matrix_inertial_2_planet_fixed_dot = body[
+            'J2000_2_planet_fixed_dot']
+        direction_cos_matrix_inertial_2_planet_fixed = direction_cos_matrix_inertial_2_planet_fixed + direction_cos_matrix_inertial_2_planet_fixed_dot * self._timer.dt
+
+        body[
+            'J2000_2_planet_fixed'] = direction_cos_matrix_inertial_2_planet_fixed
+        body[
+            'J2000_2_planet_fixed_dot'] = direction_cos_matrix_inertial_2_planet_fixed_dot
+
+        # compute position in planet-fixed frame
+
+        grav_acceleration_in_inertial = self.compute_point_mass_field(
+            mu_body, position_wrt_planet_in_inertial)
+
+        # convert back to inertial frame
+        return grav_acceleration_in_inertial
+
+    def compute_point_mass_field(
+            self,
+            mu: Tensor,  # [b, num_planet, 1]
+            position: Tensor,  # [b, num_position, num_planet, 3]
+    ) -> Tensor:
+        r = torch.norm(position, dim=-1, keepdim=True)
+        force_magnitude = -mu.unsqueeze(-3) / (
+            r**3)  # [b, num_position, num_planet, 1]
+        grav_field = force_magnitude * position
+        return grav_field.sum(-2)
+
+    def compute_point_mass_potential(self, mu: float,
+                                     position: Tensor) -> Tensor:
+        r = torch.norm(position)
+        if r < 1e-6:
+            return torch.tensor(0.0,
+                                dtype=position.dtype,
+                                device=position.device)
+        return -mu / r

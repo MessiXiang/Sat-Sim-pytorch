@@ -60,8 +60,6 @@ class StateEffectorMixin(ABC, Generic[T]):
             forceOnBody_B=torch.zeros(3),
             torqueOnBodyPntB_B=torch.zeros(3),
             torqueOnBodyPntC_B=torch.zeros(3),
-            r_BP_P=torch.zeros(3),
-            dcm_BP=torch.eye(3, 3),
         )
 
     def update_effector_mass(
@@ -97,9 +95,6 @@ class StateEffectorMixin(ABC, Generic[T]):
         state_dict: T,
         omega_BN_B: torch.Tensor,
     ) -> T:
-        return state_dict
-
-    def register_states(self, state_dict: T) -> T:
         return state_dict
 
     @abstractmethod

@@ -3,6 +3,7 @@ from typing import TypedDict
 import torch
 
 from satsim.architecture import Module
+from .hub_effector import HubEffector
 
 from ..base import BackSubMatrices
 
@@ -18,6 +19,7 @@ class Spacecraft(Module[SpacecraftStateDict]):
     def __init__(
         self,
         *args,
+        hub: HubEffector,
         dvAccum_CN_B: torch.Tensor | None = None,
         dvAccum_BN_B: torch.Tensor | None = None,
         dvAccum_CN_N: torch.Tensor | None = None,

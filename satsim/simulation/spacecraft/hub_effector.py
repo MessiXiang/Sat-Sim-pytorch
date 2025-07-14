@@ -8,11 +8,7 @@ from ..base.state_effector import (
     StateEffectorMixin,
     StateEffectorStateDict,
 )
-from satsim.utils import (
-    create_skew_symmetric_matrix,
-    Bmat,
-    to_rotation_matrix,
-)
+from satsim.utils import Bmat, to_rotation_matrix
 
 
 class HubDynamicParams(TypedDict):
@@ -32,12 +28,8 @@ class HubDynamicParams(TypedDict):
 
 class HubEffectorStateDict(StateEffectorStateDict):
     dynamic_params: HubDynamicParams
-    mass: float
-    hub_inertia_matrix: torch.Tensor
-    position_center_of_mass: torch.Tensor
-    position_primary_hub_center_of_mass: NotRequired[torch.Tensor]
-    IHubPntBc_P: NotRequired[torch.Tensor]
-    hub_back_substitution_matrices: BackSubMatrices
+    mass: torch.Tensor
+    hub_moment_of_inertia_matrix_wrt_body_point: torch.Tensor
 
 
 # MRPSwitchCount deserted
@@ -45,8 +37,9 @@ class HubEffector(StateEffectorMixin[HubEffectorStateDict]):
 
     def __init__(
         self,
-        mass: float = 1.,
-        hub_inertia_matrix: torch.Tensor | None = None,
+        mass: torch.Tensor | None = None,
+        hub_moment_of_inertia_matrix_wrt_body_point: torch.Tensor
+        | None = None,
         pos: torch.Tensor | None = None,
         velocity: torch.Tensor | None = None,
         sigma: torch.Tensor | None = None,
@@ -57,15 +50,8 @@ class HubEffector(StateEffectorMixin[HubEffectorStateDict]):
 
         Args:
             mass (float, optional): Mass of the spacecraft in kilograms. Defaults to 1.0.
-            position_center_of_mass (torch.Tensor, optional): Position vector of the spacecraft's center of mass
-                relative to the body frame origin, in body frame coordinates (3x1 tensor).
-                Defaults to zero vector if None.
-            hub_inertia_matrix (torch.Tensor, optional): Inertia tensor of the spacecraft about the
-                center of mass, in body frame coordinates (3x3 tensor). Defaults to identity
-                matrix if None.
-            pos (torch.Tensor, optional): Initial position vector of the spacecraft's
-                center of mass relative to the inertial frame origin, in inertial frame
-                coordinates (3x1 tensor). Defaults to zero vector if None.
+            hub_moment_of_inertia_matrix_wrt_body_point (torch.Tensor, optional): Inertia tensor of the spacecraft about the center of mass, in body frame coordinates (3x3 tensor). Defaults to identity matrix if None.
+            pos (torch.Tensor, optional): Initial position vector of the spacecraft's center of mass relative to the inertial frame origin, in inertial frame coordinates (3x1 tensor). Defaults to zero vector if None.
             velocity (torch.Tensor, optional): Initial velocity vector of the spacecraft's
                 center of mass in the inertial frame (3x1 tensor). Defaults to zero vector if None.
             sigma (torch.Tensor, optional): Initial Modified Rodrigues Parameters (MRP)
@@ -78,14 +64,14 @@ class HubEffector(StateEffectorMixin[HubEffectorStateDict]):
         Returns:
             None
         """
-        self.mass = mass
-        self.position_center_of_mass = position_center_of_mass or torch.zeros(
-            3)
-        self.hub_inertia_matrix = hub_inertia_matrix or torch.eye(3, 3)
+        self.mass = torch.tensor([1.]) if mass is None else mass
+        self.hub_moment_of_inertia_matrix_wrt_body_point = torch.eye(
+            3, 3
+        ) if hub_moment_of_inertia_matrix_wrt_body_point is None else hub_moment_of_inertia_matrix_wrt_body_point
         self.pos = torch.zeros(3) if pos is None else pos
-        self.velocity = velocity or torch.zeros(3)
-        self.sigma = sigma or torch.zeros(3)
-        self.omega = omega or torch.zeros(3)
+        self.velocity = torch.zeros(3) if velocity is None else velocity
+        self.sigma = torch.zeros(3) if sigma is None else sigma
+        self.omega = torch.zeros(3) if omega is None else omega
 
     def reset(self) -> HubEffectorStateDict:
         state_dict = super().state_effector_reset()
@@ -102,41 +88,16 @@ class HubEffector(StateEffectorMixin[HubEffectorStateDict]):
             **state_dict,
             dynamic_params=dynamic_params,
             mass=self.mass,
-            hub_inertia_matrix=self.hub_inertia_matrix.clone(),
-            position_center_of_mass=self.position_center_of_mass.clone(),
+            hub_moment_of_inertia_matrix_wrt_body_point=self.
+            hub_moment_of_inertia_matrix_wrt_body_point.clone(),
         )
 
     def update_effector_mass(
         self,
         state_dict: HubEffectorStateDict,
     ) -> HubEffectorStateDict:
-        effProps = state_dict['effProps']
-        mass = state_dict['mass']
-        r_BP_P = state_dict['r_BP_P']
-        dcm_BP = state_dict['dcm_BP']
-        position_center_of_mass = state_dict['position_center_of_mass']
-        hub_inertia_matrix = state_dict['hub_inertia_matrix']
-
-        position_primary_hub_center_of_mass = r_BP_P + dcm_BP.transpose(
-        ) @ position_center_of_mass
-        IHubPntBc_P = dcm_BP.transpose() @ hub_inertia_matrix @ dcm_BP
-
-        effProps[
-            'IEffPntB_B'] = IHubPntBc_P + mass * create_skew_symmetric_matrix(
-                position_primary_hub_center_of_mass
-            ) * create_skew_symmetric_matrix(
-                position_primary_hub_center_of_mass).transpose()
-
-        effProps['rEff_CB_B'] = position_primary_hub_center_of_mass
-        effProps['rEffPrime_CB_B'] = torch.zeros_like(
-            effProps['rEffPrime_CB_B'])
-        effProps['IEffPrimePntB_B'] = torch.zeros_like(
-            effProps['IEffPrimePntB_B'])
-
-        state_dict['effProps'] = effProps
-        state_dict[
-            'position_primary_hub_center_of_mass'] = position_primary_hub_center_of_mass
-        state_dict['IHubPntBc_P'] = IHubPntBc_P
+        state_dict['effProps']['IEffPntB_B'] = state_dict[
+            'hub_moment_of_inertia_matrix_wrt_body_point'].clone()
 
         return state_dict
 
@@ -203,19 +164,15 @@ class HubEffector(StateEffectorMixin[HubEffectorStateDict]):
         rotEnergyContr: torch.Tensor,
         omega_BN_B: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        position_primary_hub_center_of_mass = state_dict[
-            'position_primary_hub_center_of_mass']
-        mass = state_dict['mass']
-        IHubPntBc_P = state_dict['IHubPntBc_P']
+        hub_moment_of_inertia_matrix_wrt_body_point = state_dict[
+            'hub_moment_of_inertia_matrix_wrt_body_point']
         dynamic_params = state_dict['dynamic_params']
         omega = dynamic_params['omega']
 
-        rDot_BcB_B = omega.cross(position_primary_hub_center_of_mass)
-        rotAngMomPntCContr_B = IHubPntBc_P * omega + mass * position_primary_hub_center_of_mass.cross(
-            rDot_BcB_B)
+        rotAngMomPntCContr_B = hub_moment_of_inertia_matrix_wrt_body_point * omega
 
-        rotEnergyContr = 0.5 * (omega.dot(IHubPntBc_P @ omega) +
-                                mass * rDot_BcB_B.dot(rDot_BcB_B))
+        rotEnergyContr = 0.5 * (omega.dot(
+            hub_moment_of_inertia_matrix_wrt_body_point @ omega))
 
         return rotAngMomPntCContr_B, rotEnergyContr
 
@@ -234,7 +191,7 @@ class HubEffector(StateEffectorMixin[HubEffectorStateDict]):
         self,
         state_dict: HubEffectorStateDict,
         v_CN_N: torch.Tensor,
-    ):
+    ) -> HubEffectorStateDict:
         dynamic_params = state_dict['dynamic_params']
 
         dynamic_params['grav_velocity'] = dynamic_params['velocity'].clone()

@@ -1,9 +1,7 @@
-__all__ = [
-    'Module',
-]
+__all__ = ['Module', 'VoidStateDict']
 
 from abc import ABC, abstractmethod
-from typing import Any, Generic, Mapping, TypeVar, cast
+from typing import Any, Generic, Mapping, TypeVar, TypedDict, cast
 
 from torch import nn
 
@@ -33,3 +31,7 @@ class Module(nn.Module, ABC, Generic[T]):
             child = cast(Module, child)
             state_dict[name] = child.reset()
         return cast(T, state_dict)
+
+
+class VoidStateDict(TypedDict):
+    pass
