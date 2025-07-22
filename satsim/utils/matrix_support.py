@@ -40,80 +40,102 @@ def create_skew_symmetric_matrix(vector: torch.Tensor) -> torch.Tensor:
     return torch.stack([row0, row1, row2], dim=-2)
 
 
-def Bmat(v: torch.Tensor) -> torch.Tensor:
+def Bmat(mrp: torch.Tensor) -> torch.Tensor:
     """
-    Compute the 3x3 B matrix for a single 3D vector using a simplified form.
-    Input:
-        v: torch.Tensor of shape [3], representing the input vector [x, y, z]
-    Output:
-        B: torch.Tensor of shape [3, 3], the computed B matrix
-    """
-    # Validate input
-    if v.shape[-1] != 3:
-        raise ValueError(f"Input last dim must be of shape [3], got {v.shape}")
-
-    # Compute 1 - ||v||^2
-    ms2 = 1.0 - torch.sum(v**2, dim=-1, keepdim=True).unsqueeze(-1)
-
-    # Compute outer product vv^T
-    vvT = torch.matmul(v.unsqueeze(-1), v.unsqueeze(-2))  # v @ v.T
-
-    # Compute skew-symmetric matrix [v]_\times
-    S = create_skew_symmetric_matrix(v)
-
-    # Compute B = (1 - ||v||^2)I + 2vv^T + 2[v]_\times
-    I = torch.eye(3, device=v.device)
-    B = ms2 * I + 2 * vvT + 2 * S
-
-    return B
-
-
-def to_rotation_matrix(vec: torch.Tensor) -> torch.Tensor:
-    """
-    This function computes a 3x3 rotation matrix from a MRP vector.
-
+    Computes the B-matrix for a batch of Modified Rodrigues Parameters (MRP).
+    
     Args:
-        vec (torch.Tensor): Input tensor of shape [3] representing a 3D vector (x, y, z).
-
+        mrp: torch.Tensor of shape [batch_size, 3], where each row is an MRP vector (x, y, z).
+             Assumed to be float32 with requires_grad=True for gradient tracking.
+    
     Returns:
-        torch.Tensor: Output tensor of shape [3, 3] representing the rotation matrix.
-
-    Raises:
-        ValueError: If the input tensor does not have shape [3].
-
-    Notes:
-        The computation follows the formula from the original C++ implementation:
-        - Diagonal terms: 4 * (x^2 - y^2 - z^2) + (1 - ||v||^2)^2, etc.
-        - Off-diagonal terms: 8xy ± 4z(1 - ||v||^2), etc.
-        - Normalization: Divide by (1 + ||v||^2)^2.
-        The implementation uses vectorized operations for efficiency and supports
-        GPU acceleration by inheriting the input tensor's dtype and device.
+        torch.Tensor of shape [batch_size, 3, 3], where each [3, 3] slice is a B-matrix.
     """
-    q1, q2, q3 = vec.unbind(-1)
-    q1_sq, q2_sq, q3_sq = q1**2, q2**2, q3**2
-    d1 = q1_sq + q2_sq + q3_sq
-    S = 1 - d1
-    d = (1 + d1)**2
+    # Compute intermediate values
+    ms2 = 1.0 - torch.sum(mrp**2, dim=-1, keepdim=True)  # [batch_size, 1]
 
-    c00 = 4 * (2 * q1_sq - d1) + S**2
-    c01 = 8 * q1 * q2 + 4 * q3 * S
-    c02 = 8 * q1 * q3 - 4 * q2 * S
-    c10 = 8 * q2 * q1 - 4 * q3 * S
-    c11 = 4 * (2 * q2_sq - d1) + S**2
-    c12 = 8 * q2 * q3 + 4 * q1 * S
-    c20 = 8 * q3 * q1 + 4 * q2 * S
-    c21 = 8 * q3 * q2 - 4 * q1 * S
-    c22 = 4 * (2 * q3_sq - d1) + S**2
+    x, y, z = mrp.unbind(-1)  # [batch_size]
 
-    C = torch.stack(
+    s1s2 = x * y  # [batch_size]
+    s1s3 = x * z  # [batch_size]
+    s2s3 = y * z  # [batch_size]
+
+    # Construct B-matrix elements
+    b00 = ms2.squeeze() + 2.0 * x * x  # [batch_size]
+    b01 = 2.0 * (s1s2 - z)  # [batch_size]
+    b02 = 2.0 * (s1s3 + y)  # [batch_size]
+    b10 = 2.0 * (s1s2 + z)  # [batch_size]
+    b11 = ms2.squeeze() + 2.0 * y * y  # [batch_size]
+    b12 = 2.0 * (s2s3 - x)  # [batch_size]
+    b20 = 2.0 * (s1s3 - y)  # [batch_size]
+    b21 = 2.0 * (s2s3 + x)  # [batch_size]
+    b22 = ms2.squeeze() + 2.0 * z * z  # [batch_size]
+
+    # Stack elements into [batch_size, 3, 3] tensor
+    b_mat = torch.stack(
         [
-            torch.stack([c00, c01, c02], dim=-1),
-            torch.stack([c10, c11, c12], dim=-1),
-            torch.stack([c20, c21, c22], dim=-1),
+            torch.stack([b00, b01, b02], dim=-1),
+            torch.stack([b10, b11, b12], dim=-1),
+            torch.stack([b20, b21, b22], dim=-1)
         ],
         dim=-2,
-    )
-    return C / d.unsqueeze(-1).unsqueeze(-1)
+    )  # [batch_size, 3, 3]
+
+    return b_mat
+
+
+def to_rotation_matrix(mrp: torch.Tensor) -> torch.Tensor:
+    """
+    Converts a batch of Modified Rodrigues Parameters (MRP) to rotation matrices.
+    
+    Args:
+        mrp: torch.Tensor of shape [batch_size, 3], where each row is an MRP vector (x, y, z).
+             Assumed to be float32 with requires_grad=True for gradient tracking.
+    
+    Returns:
+        torch.Tensor of shape [batch_size, 3, 3], where each [3, 3] slice is a rotation matrix.
+    """
+
+    # Compute intermediate values
+    ps2 = 1.0 + torch.sum(mrp**2, dim=-1, keepdim=True)  # [batch_size, 1]
+    ms2 = 1.0 - torch.sum(mrp**2, dim=-1, keepdim=True)  # [batch_size, 1]
+    ms2_sq = ms2 * ms2  # [batch_size, 1]
+
+    x, y, z = mrp.unbind(-1)  # [batch_size]
+
+    s1s2 = 8.0 * x * y  # [batch_size]
+    s1s3 = 8.0 * x * z  # [batch_size]
+    s2s3 = 8.0 * y * z  # [batch_size]
+
+    s1_sq = x * x  # [batch_size]
+    s2_sq = y * y  # [batch_size]
+    s3_sq = z * z  # [batch_size]
+
+    # Construct rotation matrix elements
+    r00 = 4.0 * (s1_sq - s2_sq - s3_sq) + ms2_sq.squeeze()  # [batch_size]
+    r01 = s1s2 - 4.0 * z * ms2.squeeze()  # [batch_size]
+    r02 = s1s3 + 4.0 * y * ms2.squeeze()  # [batch_size]
+    r10 = s1s2 + 4.0 * z * ms2.squeeze()  # [batch_size]
+    r11 = 4.0 * (-s1_sq + s2_sq - s3_sq) + ms2_sq.squeeze()  # [batch_size]
+    r12 = s2s3 - 4.0 * x * ms2.squeeze()  # [batch_size]
+    r20 = s1s3 - 4.0 * y * ms2.squeeze()  # [batch_size]
+    r21 = s2s3 + 4.0 * x * ms2.squeeze()  # [batch_size]
+    r22 = 4.0 * (-s1_sq - s2_sq + s3_sq) + ms2_sq.squeeze()  # [batch_size]
+
+    # Stack elements into [batch_size, 3, 3] tensor
+    res = torch.stack(
+        [
+            torch.stack([r00, r01, r02], dim=-1),
+            torch.stack([r10, r11, r12], dim=-1),
+            torch.stack([r20, r21, r22], dim=-1)
+        ],
+        dim=-2,
+    )  # [batch_size, 3, 3]
+
+    # Normalize the rotation matrix
+    res = res / (ps2 * ps2).unsqueeze(-1)  # Broadcasting to [batch_size, 3, 3]
+
+    return res
 
 
 def addMRP(q1: torch.Tensor, q2: torch.Tensor) -> torch.Tensor:

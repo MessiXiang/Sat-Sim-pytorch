@@ -1,30 +1,24 @@
 __all__ = ['ReactionWheelsStateDict', 'ReactionWheels']
 from dataclasses import fields
-from typing import Iterable, NotRequired, Sequence, TypedDict
+from typing import Iterable, TypedDict
 
 import torch
 import torch.nn.functional as F
 
-from satsim.architecture import Module
-
-from ..base import BackSubMatrices, StateEffectorMixin, StateEffectorStateDict
+from ..base import BackSubMatrices, BaseStateEffector, StateEffectorStateDict
 from .reaction_wheels import ReactionWheel
 
 
 class ReactionWheelsDynamicParams(TypedDict):
     angular_velocity: torch.Tensor
-    angular_acceleration: NotRequired[torch.Tensor]
 
 
-class ReactionWheelsStateDict(StateEffectorStateDict):
+class ReactionWheelsStateDict(
+        StateEffectorStateDict[ReactionWheelsDynamicParams]):
     current_torque: torch.Tensor
-    dynamic_params: ReactionWheelsDynamicParams
 
 
-class ReactionWheels(
-        Module[ReactionWheelsStateDict],
-        StateEffectorMixin[ReactionWheelsStateDict],
-):
+class ReactionWheels(BaseStateEffector[ReactionWheelsStateDict]):
 
     def __init__(
         self,
@@ -57,23 +51,18 @@ class ReactionWheels(
             states[key] = value.unsqueeze(-2)
 
         self.angular_velocity_init = states.pop('angular_velocity_init')
-        try:
-            states['spin_axis_in_body'] = F.one_hot(
-                states['spin_axis_in_body'].squeeze(-2),
-                num_classes=3,
-            ).transpose(-1, -2).float()
-        except:
-            breakpoint()
+
+        states['spin_axis_in_body'] = F.one_hot(
+            states['spin_axis_in_body'].squeeze(-2),
+            num_classes=3,
+        ).transpose(-1, -2).float()
 
         for attr, value in states.items():
             self.register_buffer(attr, value, persistent=False)
 
     def reset(self) -> ReactionWheelsStateDict:
         state_dict = super().reset()
-
-        state_effector_state_dict = super().state_effector_reset()
         state_dict.update(
-            state_effector_state_dict,
             current_torque=torch.zeros_like(self.angular_velocity_init),
             dynamic_params=ReactionWheelsDynamicParams(
                 angular_velocity=self.angular_velocity_init),
@@ -83,11 +72,12 @@ class ReactionWheels(
     def update_back_substitution_contribution(
         self,
         state_dict: ReactionWheelsStateDict,
+        integrate_time_step: float,
         back_substitution_contribution: BackSubMatrices,
         sigma_BN: torch.Tensor,
         angular_velocity_BN_B: torch.Tensor,
         g_N: torch.Tensor,
-    ) -> tuple[ReactionWheelsStateDict, BackSubMatrices]:
+    ) -> BackSubMatrices:
         angular_velocity = state_dict['dynamic_params']['angular_velocity']
         current_torque = state_dict['current_torque']
         moment_of_inertia_wrt_spin = self.get_buffer(
@@ -109,15 +99,16 @@ class ReactionWheels(
                     dim=-2,
                 )).sum(-1)
 
-        return state_dict, back_substitution_contribution
+        return back_substitution_contribution
 
     def compute_derivatives(
         self,
         state_dict: ReactionWheelsStateDict,
+        integrate_time_step: float,
         rDDot_BN_N: torch.Tensor,
-        angular_velocityDot_BN_B: torch.Tensor,
+        omegaDot_BN_B: torch.Tensor,
         sigma_BN: torch.Tensor,
-    ) -> ReactionWheelsStateDict:
+    ) -> ReactionWheelsDynamicParams:
         dynamic_params = state_dict['dynamic_params']
         current_torque = state_dict['current_torque']
         moment_of_inertia_wrt_spin = self.get_buffer(
@@ -125,17 +116,17 @@ class ReactionWheels(
         spin_axis_in_body = self.get_buffer('spin_axis_in_body')
 
         angular_acceleration = current_torque / moment_of_inertia_wrt_spin - torch.matmul(
-            angular_velocityDot_BN_B.unsqueeze(-2),
+            omegaDot_BN_B.unsqueeze(-2),
             spin_axis_in_body,
         )
-        dynamic_params['angular_acceleration'] = angular_acceleration
 
-        state_dict['dynamic_params'] = dynamic_params
-        return state_dict
+        dynamic_params['angular_velocity'] = angular_acceleration
+        return dynamic_params
 
     def update_energy_momentum_contributions(
         self,
         state_dict: ReactionWheelsStateDict,
+        integrate_time_step: float,
         rotAngMomPntCContr_B: torch.Tensor,
         rotEnergyContr: torch.Tensor,
         angular_velocity_BN_B: torch.Tensor,
