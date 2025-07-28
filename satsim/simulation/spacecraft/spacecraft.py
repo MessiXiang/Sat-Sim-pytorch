@@ -5,16 +5,16 @@ __all__ = [
     'DynamicParamsDict',
 ]
 from copy import deepcopy
-from typing import TypedDict
+from typing import Iterable, TypedDict
 
 import torch
 
-from satsim.architecture import Module
+from satsim.architecture import Module, Timer
 
-from ...utils.matrix_support import to_rotation_matrix
-from ..base.state_effector import (BackSubMatrices, BaseStateEffector,
-                                   MassProps, StateEffectorStateDict)
-from ..gravity.gravity_effector import Ephemeris, GravityField
+from satsim.utils.matrix_support import to_rotation_matrix
+from ..base import (BackSubMatrices, BaseStateEffector, MassProps,
+                    StateEffectorStateDict)
+from ..gravity import GravityField
 from .hub_effector import HubEffector, HubEffectorStateDict
 
 
@@ -33,6 +33,7 @@ class SpacecraftStateDict(TypedDict):
     mass_props: MassProps
     _hub: HubEffectorStateDict
     accumulated_non_gravitational_velocity_change_in_body: torch.Tensor
+    accumulated_non_gravitational_velocity_change_in_inertial: torch.Tensor
     # state effectors are stored as submodules
     # _state_effector_i: StateEffectorStateDict
 
@@ -47,6 +48,7 @@ class Spacecraft(
     def __init__(
         self,
         *args,
+        timer: Timer,
         mass: torch.Tensor | None = None,
         moment_of_inertia_matrix_wrt_body_point: torch.Tensor
         | None = None,
@@ -55,12 +57,13 @@ class Spacecraft(
         sigma: torch.Tensor | None = None,
         omega: torch.Tensor | None = None,
         gravity_field: GravityField,
-        state_effectors: list[BaseStateEffector] | None = None,
+        state_effectors: Iterable[BaseStateEffector] | None = None,
         **kwargs,
     ) -> None:
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, timer=timer, **kwargs)
 
         self._hub = HubEffector(
+            timer=timer,
             mass=mass,
             moment_of_inertia_matrix_wrt_body_point=
             moment_of_inertia_matrix_wrt_body_point,
@@ -70,31 +73,22 @@ class Spacecraft(
             omega=omega,
         )
         self.add_module('_gravity_field', gravity_field)
-        state_effectors = state_effectors or []
-        self._num_state_effectors = len(state_effectors)
-        for id, state_effector in enumerate(state_effectors or []):
-            self.add_module(f'_state_effector_{id}', state_effector)
+        state_effectors = [] if state_effectors is None else state_effectors
+        idx = -1
+        for idx, state_effector in enumerate(state_effectors):
+            self.add_module(f'_state_effector_{idx}', state_effector)
 
-    @property
-    def _gravity_field(self) -> GravityField:
-        return self.get_submodule('_gravity_field')
+        self._num_state_effectors = idx + 1
 
     def reset(self) -> SpacecraftStateDict:
         state_dict = super().reset()
-
-        num_planet_bodies = self._gravity_field.num_planet_bodies + 1
-        fake_central_body_ephemeris = Ephemeris(
-            position_in_inertial=torch.zeros(1, 3),
-            velocity_in_inertial=torch.zeros(1, 3),
-        )
-        fake_planet_bodies_ephemeris = Ephemeris(
-            position_in_inertial=torch.zeros(num_planet_bodies, 3),
-            velocity_in_inertial=torch.zeros(num_planet_bodies, 3),
-        )
-        state_dict = self.equation_of_motion(
-            state_dict=state_dict,
-            central_body_ephemeris=fake_central_body_ephemeris,
-            planet_body_ephemeris=fake_planet_bodies_ephemeris,
+        state_dict = self.update_spacecraft_mass_props(state_dict,
+                                                       0. * self._timer.dt)
+        state_dict.update(
+            accumulated_non_gravitational_velocity_change_in_body=torch.zeros(
+                3),
+            accumulated_non_gravitational_velocity_change_in_inertial=torch.
+            zeros(3),
         )
 
         return state_dict
@@ -109,26 +103,30 @@ class Spacecraft(
         This method updates the mass properties of the spacecraft by summing up the mass properties of the
         hub and all state effectors.
         """
-        mass = []
-        moment_of_inertia_matrix_wrt_body_point = []
-        for id in range(self._num_state_effectors):
-            state_effector_id = f'_state_effector_{id}'
-            state_effector: BaseStateEffector = self.get_submodule(
-                state_effector_id)
-            state_effector_state_dict: StateEffectorStateDict = state_dict.get(
-                state_effector_id, {})
-            state_effector_mass_props = state_effector.update_effector_mass(
-                state_dict=state_effector_state_dict,
-                integrate_time_step=integrate_time_step,
-            )
-            mass.append(state_effector_mass_props['mass'])
-            moment_of_inertia_matrix_wrt_body_point.append(
-                state_effector_mass_props[
-                    'moment_of_inertia_matrix_wrt_body_point'])
+        mass = 0.
+        moment_of_inertia_matrix_wrt_body_point = 0.
+        if self._num_state_effectors > 0:
+            mass = []
+            moment_of_inertia_matrix_wrt_body_point = []
+            for idx in range(self._num_state_effectors):
+                state_effector_id = f'_state_effector_{idx}'
+                state_effector: BaseStateEffector = self.get_submodule(
+                    state_effector_id)
+                state_effector_state_dict: StateEffectorStateDict = state_dict.get(
+                    state_effector_id, {})
+                state_effector_mass_props = state_effector.update_effector_mass(
+                    state_dict=state_effector_state_dict,
+                    integrate_time_step=integrate_time_step,
+                )
+                mass.append(state_effector_mass_props['mass'])
+                moment_of_inertia_matrix_wrt_body_point.append(
+                    state_effector_mass_props[
+                        'moment_of_inertia_matrix_wrt_body_point'])
 
-        mass = torch.stack(mass, dim=-1).sum(dim=-1)
-        moment_of_inertia_matrix_wrt_body_point = torch.stack(
-            moment_of_inertia_matrix_wrt_body_point, dim=-1).sum(dim=-1)
+            mass = torch.stack(mass, dim=-1).sum(dim=-1)
+            moment_of_inertia_matrix_wrt_body_point = torch.stack(
+                moment_of_inertia_matrix_wrt_body_point, dim=-1).sum(dim=-1)
+
         mass = mass + self._hub.get_buffer('mass')
         moment_of_inertia_matrix_wrt_body_point = (
             moment_of_inertia_matrix_wrt_body_point +
@@ -145,9 +143,7 @@ class Spacecraft(
         self,
         state_dict: SpacecraftStateDict,
         integrate_time_step: float,
-        central_body_ephemeris: Ephemeris,
-        planet_body_ephemeris: Ephemeris,
-    ) -> tuple[DynamicParamsDict, DynamicParamsDict]:
+    ) -> DynamicParamsDict:
         state_dict = self.update_spacecraft_mass_props(
             state_dict,
             integrate_time_step=integrate_time_step,
@@ -163,11 +159,8 @@ class Spacecraft(
 
         direction_cosine_matrix_body_to_inertial = to_rotation_matrix(sigma)
 
-        gravity_acceleration = self._gravity_field.compute_gravity_field(
-            position,
-            central_body_ephemeris,
-            planet_body_ephemeris,
-        )
+        gravity_field: GravityField = self.get_submodule('_gravity_field')
+        _, (gravity_acceleration, ) = gravity_field(position, )
 
         # calculate back substitution matrices
         back_substitution_contribution = BackSubMatrices(
@@ -179,8 +172,8 @@ class Spacecraft(
             vec_rot=torch.zeros_like(position),
         )
         # update back substitution matrices for state effectors
-        for id in range(self._num_state_effectors):
-            state_effector_id = f'_state_effector_{id}'
+        for idx in range(self._num_state_effectors):
+            state_effector_id = f'_state_effector_{idx}'
             state_effector: BaseStateEffector = self.get_submodule(
                 state_effector_id)
             state_effector_state_dict: StateEffectorStateDict = state_dict.get(
@@ -198,7 +191,7 @@ class Spacecraft(
 
         # update back substitution matrices for hub
         back_substitution_contribution['matrix_a'] += back_substitution_contribution['matrix_a'] + \
-            mass.unsqueeze(-1) * torch.eye(3)
+            mass.unsqueeze(-1) * torch.eye(3, device=mass.device)
         back_substitution_contribution['matrix_d'] = back_substitution_contribution['matrix_d'] + \
             moment_of_inertia_matrix_wrt_body_point
         back_substitution_contribution['vec_rot'] = back_substitution_contribution['vec_rot'] + \
@@ -223,16 +216,13 @@ class Spacecraft(
         hub_state_dot = self._hub.compute_derivatives(
             state_dict=hub_state_dict,
             integrate_time_step=integrate_time_step,
-            rDDot_BN_N=hub_state_dict['dynamic_params']['velocity_dot'],
-            omegaDot_BN_B=hub_state_dict['dynamic_params']['omega_dot'],
-            sigma_BN=sigma,
             g_N=gravity_acceleration,
             back_substitution_matrices=back_substitution_contribution,
         )
 
         states_dot = dict(_hub=hub_state_dot)
-        for id in range(self._num_state_effectors):
-            state_effector_id = f'_state_effector_{id}'
+        for idx in range(self._num_state_effectors):
+            state_effector_id = f'_state_effector_{idx}'
             state_effector: BaseStateEffector = self.get_submodule(
                 state_effector_id)
             state_effector_state_dict: StateEffectorStateDict = state_dict.get(
@@ -242,8 +232,8 @@ class Spacecraft(
             state_dot = state_effector.compute_derivatives(
                 state_dict=state_effector_state_dict,
                 integrate_time_step=integrate_time_step,
-                rDDot_BN_N=hub_state_dict['dynamic_params']['pos_dot'],
-                omegaDot_BN_B=hub_state_dict['dynamic_params']['omega_dot'],
+                rDDot_BN_N=hub_state_dot['velocity'],
+                omegaDot_BN_B=hub_state_dot['omega'],
                 sigma_BN=sigma,
             )
             states_dot[state_effector_id] = state_dot
@@ -258,8 +248,8 @@ class Spacecraft(
         hub_state_dict: HubEffectorStateDict = state_dict.get('_hub', {})
         dynamic_params['_hub'] = hub_state_dict['dynamic_params']
 
-        for id in range(self._num_state_effectors):
-            state_effector_id = f'_state_effector_{id}'
+        for idx in range(self._num_state_effectors):
+            state_effector_id = f'_state_effector_{idx}'
             state_effector_state_dict = state_dict.get(state_effector_id, {})
             dynamic_params[state_effector_id] = (
                 state_effector_state_dict['dynamic_params'])
@@ -284,8 +274,6 @@ class Spacecraft(
     def integrate_to_this_time(
         self,
         state_dict: SpacecraftStateDict,
-        central_body_ephemeris: Ephemeris,
-        planet_body_ephemeris: Ephemeris | None = None,
     ) -> SpacecraftStateDict:
         """ Using 4 stage rungekutta method to solve the next state of the 
         spacecraft. Originally, this method need to determine some matrix of coeificient, but here we just use a specified set of values for simplification. 
@@ -293,6 +281,7 @@ class Spacecraft(
         equation solver class to make it possible for user to write their own
         differential equation solver. 
         """
+
         # get dynamic params space and save current dynamic params state
         dynamic_params = self.get_dynamic_params(state_dict)
         previous_dynamic_params = deepcopy(dynamic_params)
@@ -301,10 +290,7 @@ class Spacecraft(
         k1 = self.equation_of_motion(
             state_dict=state_dict,
             integrate_time_step=-1. * self._timer.dt,
-            central_body_ephemeris=central_body_ephemeris,
-            planet_body_ephemeris=planet_body_ephemeris,
         )
-        #save current dynamic state
 
         # stage 2
         for module_name, module_dynamic_params in dynamic_params.items():
@@ -312,15 +298,14 @@ class Spacecraft(
             module_previous_dynamic_state = previous_dynamic_params[
                 module_name]
             for state_name in module_dynamic_params.keys():
-                module_dynamic_params[state_name] = module_previous_dynamic_state[state_name] + \
-                        0.5 * self._timer.dt * \
-                        module_dynamic_params_dot[state_name]
+                module_dynamic_params[state_name] = \
+                    module_previous_dynamic_state[state_name] + \
+                    0.5 * self._timer.dt * \
+                    module_dynamic_params_dot[state_name]
         state_dict = self.apply_dynamic_params(state_dict, dynamic_params)
         k2 = self.equation_of_motion(
             state_dict=state_dict,
             integrate_time_step=-0.5 * self._timer.dt,
-            central_body_ephemeris=central_body_ephemeris,
-            planet_body_ephemeris=planet_body_ephemeris,
         )
 
         # state 3
@@ -329,15 +314,14 @@ class Spacecraft(
             module_previous_dynamic_state = previous_dynamic_params[
                 module_name]
             for state_name in module_dynamic_params.keys():
-                module_dynamic_params[state_name] = module_previous_dynamic_state[state_name] + \
-                        0.5 * self._timer.dt * \
-                        module_dynamic_params_dot[state_name]
+                module_dynamic_params[state_name] = \
+                    module_previous_dynamic_state[state_name] + \
+                    0.5 * self._timer.dt * \
+                    module_dynamic_params_dot[state_name]
         state_dict = self.apply_dynamic_params(state_dict, dynamic_params)
         k3 = self.equation_of_motion(
             state_dict=state_dict,
             integrate_time_step=-0.5 * self._timer.dt,
-            central_body_ephemeris=central_body_ephemeris,
-            planet_body_ephemeris=planet_body_ephemeris,
         )
 
         # stage 4
@@ -346,15 +330,14 @@ class Spacecraft(
             module_previous_dynamic_state = previous_dynamic_params[
                 module_name]
             for state_name in module_dynamic_params.keys():
-                module_dynamic_params[state_name] = module_previous_dynamic_state[state_name] + \
-                        1 * self._timer.dt * \
-                        module_dynamic_params_dot[state_name]
+                module_dynamic_params[state_name] = \
+                    module_previous_dynamic_state[state_name] + \
+                    1 * self._timer.dt * \
+                    module_dynamic_params_dot[state_name]
         state_dict = self.apply_dynamic_params(state_dict, dynamic_params)
         k4 = self.equation_of_motion(
             state_dict=state_dict,
             integrate_time_step=0. * self._timer.dt,
-            central_body_ephemeris=central_body_ephemeris,
-            planet_body_ephemeris=planet_body_ephemeris,
         )
 
         # now we can calculate the next state
@@ -365,6 +348,7 @@ class Spacecraft(
             module_state_dot_k4 = k4[module_name]
             module_previous_dynamic_state = previous_dynamic_params[
                 module_name]
+
             for state_name in module_dynamic_params.keys():
                 module_dynamic_params[state_name] = module_previous_dynamic_state[state_name] + \
                     1/6 * self._timer.dt * module_state_dot_k1[state_name] + \
@@ -372,23 +356,6 @@ class Spacecraft(
                     1/3 * self._timer.dt * module_state_dot_k3[state_name] + \
                     1/6 * self._timer.dt * module_state_dot_k4[state_name]
         state_dict = self.apply_dynamic_params(state_dict, dynamic_params)
-        return state_dict
-
-    def update_state_effectors(
-        self,
-        state_dict: SpacecraftStateDict,
-        *args,
-        **kwargs,
-    ) -> SpacecraftStateDict:
-        for id in range(self._num_state_effectors):
-            state_effector_id = f'_state_effector_{id}'
-            state_effector: BaseStateEffector = self.get_submodule(
-                state_effector_id)
-            state_effector_state_dict: StateEffectorStateDict = state_dict.get(
-                state_effector_id, {})
-            state_effector_state_dict, _ = state_effector(
-                state_effector_state_dict, *args, **kwargs)
-            state_dict[state_effector_id] = state_effector_state_dict
 
         return state_dict
 
@@ -396,11 +363,10 @@ class Spacecraft(
         self,
         state_dict: SpacecraftStateDict,
         *args,
-        central_body_ephemeris: Ephemeris,
-        planet_body_ephemeris: Ephemeris | None = None,
         **kwargs,
     ) -> tuple[SpacecraftStateDict, tuple[SpacecraftStateOutput]]:
         ## pre-solution
+
         hub_state_dict: HubEffectorStateDict = state_dict.get('_hub', {})
         hub_state_dict = self._hub.match_gravity_to_velocity_state(
             hub_state_dict,
@@ -410,11 +376,7 @@ class Spacecraft(
         omega_before = hub_state_dict['dynamic_params']['omega'].clone()
 
         ## solve next state
-        state_dict = self.integrate_to_this_time(
-            state_dict=state_dict,
-            central_body_ephemeris=central_body_ephemeris,
-            planet_body_ephemeris=planet_body_ephemeris,
-        )
+        state_dict = self.integrate_to_this_time(state_dict=state_dict, )
 
         ## post-solution
         state_dict = self.update_spacecraft_mass_props(
@@ -445,11 +407,14 @@ class Spacecraft(
         omega_dot = (omega - omega_before) / self._timer.dt
 
         hub_state_dict = state_dict['_hub']
-        hub_state_dict = self._hub.modify_states(state_dict=hub_state_dict)
+        hub_state_dict = self._hub.modify_states(
+            state_dict=hub_state_dict,
+            integrate_time_step=0. * self._timer.dt,
+        )
         state_dict['_hub'] = hub_state_dict
 
-        for id in range(self._num_state_effectors):
-            state_effector_id = f'_state_effector_{id}'
+        for idx in range(self._num_state_effectors):
+            state_effector_id = f'_state_effector_{idx}'
             state_effector: BaseStateEffector = self.get_submodule(
                 state_effector_id)
             state_effector_state_dict: StateEffectorStateDict = state_dict.get(
@@ -465,15 +430,13 @@ class Spacecraft(
             )
             state_dict[state_effector_id] = state_effector_state_dict
 
-        state_dict = self.update_state_effectors(state_dict, *args, **kwargs)
-
         # prepare output
+        gravity_field: GravityField = self.get_submodule('_gravity_field')
         position = state_dict['_hub']['dynamic_params']['pos']
         velocity = state_dict['_hub']['dynamic_params']['velocity']
-        position_in_ineritial, velocity_in_inertial = self._gravity_field.update_inertial_position_and_velocity(
+        position_in_ineritial, velocity_in_inertial = gravity_field.update_inertial_position_and_velocity(
             position,
             velocity,
-            central_body_ephemeris=central_body_ephemeris,
         )
 
         return state_dict, (SpacecraftStateOutput(

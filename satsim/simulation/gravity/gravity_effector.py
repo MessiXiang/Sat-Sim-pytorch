@@ -1,110 +1,171 @@
 __all__ = [
     'GravityField',
-    'PointMassGravityField',
-    'Ephemeris',
 ]
-from abc import ABC, abstractmethod
-from typing import Self
+from typing import Iterable
+
 import torch
 from torch import Tensor
-from typing_extensions import TypedDict
 
 from satsim.architecture import Module, VoidStateDict
+from satsim.utils import move_to
+
+from .gravity_body import GravityBody
+from .spice_interface import (SpiceInterface, string_normalizer,
+                              zero_ephemeris)
 
 
-class Ephemeris(TypedDict):
-    """
-    All Tensor should be of shape [batch_size, num_body, *value_shape]. First two dimension can be ommited or set to 1
-    
-    """
-    position_in_inertial: Tensor  # position vector
-    velocity_in_inertial: Tensor  # velocity vector
-    J2000_2_planet_fixed: Tensor  # DCM from J2000 to planet-fixed
-    J2000_2_planet_fixed_dot: Tensor  # DCM derivative
-
-
-class GravityField(Module[VoidStateDict], ABC):
+class GravityField(Module[VoidStateDict]):
 
     def __init__(
         self,
         *args,
-        central_body_mu: float,
-        planet_bodies_mu: list[float] | None = None,
+        spice_interface: SpiceInterface | None = None,
+        gravity_bodies: Iterable[GravityBody] | GravityBody,
         **kwargs,
-    ):
-
+    ) -> None:
         super().__init__(*args, **kwargs)
 
-        if planet_bodies_mu is None:
-            planet_bodies_mu = []
+        if spice_interface is not None:
+            self.add_module('_spice_interface', spice_interface)
+        else:
+            self._spice_interface = None
 
-        self.register_buffer(
-            'planet_bodies_mu',
-            torch.tensor(planet_bodies_mu),
-            persistent=False,
-        )
-        self.register_buffer(
-            'central_body_mu',
-            torch.tensor(central_body_mu),
-            persistent=False,
-        )
+        if isinstance(gravity_bodies, GravityBody):
+            gravity_bodies = [gravity_bodies]
+
+        gravity_bodies_names: list[str] = []
+        self._central_body_name: str | None = None
+        for gravity_body in gravity_bodies:
+            gravity_body_name = string_normalizer(gravity_body.name)
+            if gravity_body_name in gravity_bodies_names:
+                raise ValueError('Multiple body have same name')
+
+            if gravity_body.is_central:
+                if self._central_body_name is not None:
+                    raise ValueError('Multiple central body')
+                self._central_body_name = gravity_body_name
+
+            gravity_bodies_names.append(gravity_body_name)
+            self.add_module(f'_gravity_body_{gravity_body_name}', gravity_body)
+
+        self._gravity_bodies_names = gravity_bodies_names
 
     @property
-    def num_planet_bodies(self):
-        planet_bodies_mu = self.get_buffer('planet_bodies_mu')
-        return planet_bodies_mu.size(-1)
+    def gravity_bodies_names(self) -> list[str]:
+        return self._gravity_bodies_names
 
     @property
-    def all_grav_body_mu(self):
-        planet_bodies_mu = self.get_buffer('planet_bodies_mu')
-        central_body_mu = self.get_buffer('central_body_mu')
-        return torch.cat([planet_bodies_mu, central_body_mu], dim=-2)
+    def spice_interface(self) -> SpiceInterface | None:
+        try:
+            return self.get_submodule('_spice_interface')
+        except AttributeError:
+            return None
 
-    def compute_gravity_field(
+    @property
+    def central_gravity_body(self) -> GravityBody | None:
+        if self._central_body_name is None:
+            return None
+
+        return self.get_submodule(f'_gravity_body_{self._central_body_name}')
+
+    @property
+    def central_gravity_body_idx(self) -> int | None:
+        if self._central_body_name is None:
+            return None
+
+        return self._gravity_bodies_names.index(self._central_body_name)
+
+    def _load_ephemeris(self, target: torch.Tensor) -> None:
+
+        if self.spice_interface is None:
+            gravity_bodies_ephemeris = zero_ephemeris()
+        else:
+            _, (gravity_bodies_ephemeris, ) = self.spice_interface(
+                names=self.gravity_bodies_names, )
+
+        self._gravity_bodies_ephemeris = move_to(
+            gravity_bodies_ephemeris,
+            target=target,
+        )
+
+    def _calculate_next_position(self, ) -> None:
+        """Euler integration to compute planet position"""
+        dt = self._timer.dt
+
+        ephemeris = self._gravity_bodies_ephemeris
+        self._gravity_bodies_position_in_inertial = ephemeris[
+            'position_in_inertial'] + ephemeris['velocity_in_inertial'] * dt
+
+    def forward(
         self,
-        position_spacecraft_wrt_central_body_in_inertial:
-        Tensor,  # [b, num_spacecraft, 3]
-        central_body_ephemeris: Ephemeris,
-        planet_body_ephemeris: Ephemeris | None = None,
-    ) -> Tensor:
-        position_central_body_in_inertial = self._calculate_next_position(
-            central_body_ephemeris)  # [b, 1, 3]
-        position_spacecraft_in_inertial = position_spacecraft_wrt_central_body_in_inertial + position_central_body_in_inertial
+        position_spacecraft_wrt_central_point_in_inertial: Tensor,  #[b, ns, 3]
+        state_dict: VoidStateDict | None = None,
+        *args,
+        **kwargs,
+    ) -> tuple[VoidStateDict, tuple[Tensor]]:
+        """position_spacecraft_wrt_central_body_in_inertial(Tensor)  [b, num_spacecraft, 3]"""
+        self._load_ephemeris(position_spacecraft_wrt_central_point_in_inertial)
+        self._calculate_next_position()
 
-        acceleration_spacecraft_in_inertial = torch.zeros_like(
-            position_spacecraft_wrt_central_body_in_inertial)
+        if self.central_gravity_body is not None:
+            position_spacecraft_in_inertial = \
+                position_spacecraft_wrt_central_point_in_inertial + \
+                self._gravity_bodies_position_in_inertial[..., self.central_gravity_body_idx, :]
+        else:
+            position_spacecraft_in_inertial = \
+                position_spacecraft_wrt_central_point_in_inertial
 
-        position_planet_in_inertial = self._calculate_next_position(
-            planet_body_ephemeris)  # [b, num_planet,3]
-        all_body_next_position_in_inertial = torch.cat(
-            [position_planet_in_inertial, position_central_body_in_inertial],
-            dim=-2,
-        )
-        position_spacecraft_wrt_planet_in_inerital = position_spacecraft_in_inertial.unsqueeze(
-            -2) - all_body_next_position_in_inertial.unsqueeze(
-                -3)  # [b, num_spacecraft, num_planet + 1, 3]
+        position_spacecraft_in_inertial = position_spacecraft_in_inertial.unsqueeze(
+            -2)
+        position_spacecraft_wrt_planet_in_inerital = \
+            position_spacecraft_in_inertial - \
+        self._gravity_bodies_position_in_inertial.expand_as(
+            position_spacecraft_in_inertial,
+        )  # [b, num_spacecraft, num_planet, 3]
 
         # Subtract acceleration of central body due to other bodies to
-        # get relative acceleration of spacecraft. See Ballado on
+        # get relative acceleration of spacecraft. See Vallado on
         # "Three-body and n-body Equations"
-        acceleration_spacecraft_in_inertial = acceleration_spacecraft_in_inertial + self.compute_field(
-            mu=self.get_buffer('planet_bodies_mu'),  # [b, num_planet, 1]
-            position=(position_planet_in_inertial -
-                      position_central_body_in_inertial).unsqueeze(-3),
-        )  # [b, 1, 3]
+        accelerations_central_body = []  # [b,(1),3]
+        accelerations_spacecraft = []  #[b,ns,3]
+        for idx, gravity_body_name in enumerate(self._gravity_bodies_names):
+            gravity_body: GravityBody = self.get_submodule(
+                f'_gravity_body_{gravity_body_name}')
+            if (self._central_body_name is not None
+                    and self._central_body_name != gravity_body_name):
+                relative_position_gravity_body = \
+                    self._gravity_bodies_position_in_inertial[...,idx,:] \
+                    - self._gravity_bodies_position_in_inertial[...,self.central_gravity_body_idx,:]
 
-        acceleration_spacecraft_in_inertial = acceleration_spacecraft_in_inertial + self.compute_field(
-            mu=self.all_grav_body_mu,
-            position=position_spacecraft_wrt_planet_in_inerital,
-        )
+                _, (acceleration_central_body, ) = gravity_body(
+                    relative_position=relative_position_gravity_body)
 
-        return acceleration_spacecraft_in_inertial
+                accelerations_central_body.append(acceleration_central_body)
+
+            position_spacecraft_wrt_gravity_body_in_inertial = \
+                position_spacecraft_wrt_planet_in_inerital[
+                ..., idx, :]
+            _, (acceleration_spacecraft, ) = gravity_body(
+                relative_position=
+                position_spacecraft_wrt_gravity_body_in_inertial)
+            accelerations_spacecraft.append(acceleration_spacecraft)
+
+        if len(accelerations_central_body) > 0:
+            total_acceleration_central_body = torch.sum(
+                torch.stack(accelerations_central_body), dim=0)
+        else:
+            total_acceleration_central_body = 0.
+
+        total_acceleration_spacecraft = torch.sum(
+            torch.stack(accelerations_spacecraft), dim=0)
+
+        return dict(), (total_acceleration_spacecraft +
+                        total_acceleration_central_body, )
 
     def update_inertial_position_and_velocity(
         self,
         position_spacecraft_wrt_central_body_in_inertial: Tensor,
         velocity_spacecraft_wrt_central_body_in_inertial: Tensor,
-        central_body_ephemeris: Ephemeris,
     ) -> tuple[Tensor, Tensor]:
         """
         Update the inertial position and velocity of the spacecraft based on the current ephemeris of the central body.
@@ -118,8 +179,9 @@ class GravityField(Module[VoidStateDict], ABC):
             tuple[Tensor, Tensor]: Updated position and velocity of the spacecraft in inertial frame.
                 Shapes: ([batch_size, num_spacecraft, 3], [batch_size, num_spacecraft, 3])
         """
-        position_central_body_in_inertial = self._calculate_next_position(
-            central_body_ephemeris)  # [b, 1, 3]
+        position_central_body_in_inertial = \
+            self._gravity_bodies_position_in_inertial[
+            ..., self.central_gravity_body_idx, :]  # [b, 1, 3]
 
         position_spacecraft_in_inertial = (
             position_spacecraft_wrt_central_body_in_inertial +
@@ -127,101 +189,10 @@ class GravityField(Module[VoidStateDict], ABC):
 
         velocity_spacecraft_in_inertial = (
             velocity_spacecraft_wrt_central_body_in_inertial +
-            central_body_ephemeris['velocity_in_inertial'])
+            self._gravity_bodies_ephemeris['velocity_in_inertial'][
+                ..., self.central_gravity_body_idx, :])
 
         return (
             position_spacecraft_in_inertial,
             velocity_spacecraft_in_inertial,
         )
-
-    def _calculate_next_position(
-        self,
-        ephemeris: Ephemeris,
-    ) -> Tensor:
-        """Euler integration to compute planet position"""
-        dt = self._timer.dt
-        return ephemeris[
-            'position_in_inertial'] + ephemeris['velocity_in_inertial'] * dt
-
-    def compute_gravity_inertial(
-        self,
-        body: Ephemeris,
-        mu_body: float,
-        position_wrt_planet_in_inertial: Tensor,
-    ) -> Tensor:
-        direction_cos_matrix_inertial_2_planet_fixed = body[
-            'J2000_2_planet_fixed']
-
-        direction_cos_matrix_inertial_2_planet_fixed_dot = body[
-            'J2000_2_planet_fixed_dot']
-        direction_cos_matrix_inertial_2_planet_fixed = direction_cos_matrix_inertial_2_planet_fixed + direction_cos_matrix_inertial_2_planet_fixed_dot * self._timer.dt
-
-        body[
-            'J2000_2_planet_fixed'] = direction_cos_matrix_inertial_2_planet_fixed
-        body[
-            'J2000_2_planet_fixed_dot'] = direction_cos_matrix_inertial_2_planet_fixed_dot
-
-        # compute position in planet-fixed frame
-
-        grav_acceleration_in_inertial = self.compute_field(
-            mu_body, position_wrt_planet_in_inertial)
-
-        # convert back to inertial frame
-        return grav_acceleration_in_inertial
-
-    @abstractmethod
-    def compute_field(
-        self,
-        mu: Tensor,  # [b, num_planet, 1]
-        position: Tensor,  # [b, num_position, num_planet, 3]
-        *args,
-        **kwargs,
-    ) -> Tensor:
-        """
-        Computes the gravitational field for a set of point masses at specified positions.
-        
-        Args:
-            mu (Tensor): Gravitational parameter tensor with shape [batch_size, num_planets, 1],
-                representing the gravitational constant times the mass of each planet.
-            position (Tensor): Position tensor with shape [batch_size, num_positions, num_planets, 3],
-                representing the 3D position vectors of points relative to each planet.
-        
-        Returns:
-            Tensor: Gravitational field tensor with shape [batch_size, num_positions, 3],
-                representing the total gravitational field at each position due to all planets.
-        """
-        pass
-
-
-class PointMassGravityField(GravityField):
-
-    def compute_field(
-        self,
-        mu: Tensor,  # [b, num_planet, 1]
-        position: Tensor,  # [b, num_position, num_planet, 3]
-        *args,
-        **kwargs,
-    ) -> Tensor:
-        """
-        Computes the gravitational field for a set of point masses at specified positions.
-
-        Args:
-            mu (Tensor): Gravitational parameter tensor with shape [batch_size, num_planets, 1],
-                representing the gravitational constant times the mass of each planet.
-            position (Tensor): Position tensor with shape [batch_size, num_positions, num_planets, 3],
-                representing the 3D position vectors of points relative to each planet.
-
-        Returns:
-            Tensor: Gravitational field tensor with shape [batch_size, num_positions, 3],
-                representing the total gravitational field at each position due to all planets.
-
-        Notes:
-            - The gravitational field is computed using the inverse-square law, where the force
-            magnitude is proportional to -mu / r^3, and r is the distance to each planet.
-            - The field contributions from all planets are summed along the planet dimension.
-        """
-        r = torch.norm(position, dim=-1, keepdim=True)
-        force_magnitude = -mu.unsqueeze(-3) / (
-            r**3)  # [b, num_position, num_planet, 1]
-        grav_field = force_magnitude * position
-        return grav_field.sum(-2)

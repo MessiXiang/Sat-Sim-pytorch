@@ -2,7 +2,8 @@ __all__ = [
     'create_skew_symmetric_matrix',
     'Bmat',
     'to_rotation_matrix',
-    'addMRP',
+    'add_mrp',
+    'sub_mrp',
 ]
 import torch
 
@@ -52,36 +53,12 @@ def Bmat(mrp: torch.Tensor) -> torch.Tensor:
         torch.Tensor of shape [batch_size, 3, 3], where each [3, 3] slice is a B-matrix.
     """
     # Compute intermediate values
-    ms2 = 1.0 - torch.sum(mrp**2, dim=-1, keepdim=True)  # [batch_size, 1]
+    ms2 = 1.0 - torch.sum(mrp**2, dim=-1)
+    term1 = ms2 * torch.eye(3, device=ms2.device)
+    term2 = 2 * create_skew_symmetric_matrix(mrp)
+    term3 = 2 * torch.matmul(mrp.unsqueeze(-1), mrp.unsqueeze(-2))
 
-    x, y, z = mrp.unbind(-1)  # [batch_size]
-
-    s1s2 = x * y  # [batch_size]
-    s1s3 = x * z  # [batch_size]
-    s2s3 = y * z  # [batch_size]
-
-    # Construct B-matrix elements
-    b00 = ms2.squeeze() + 2.0 * x * x  # [batch_size]
-    b01 = 2.0 * (s1s2 - z)  # [batch_size]
-    b02 = 2.0 * (s1s3 + y)  # [batch_size]
-    b10 = 2.0 * (s1s2 + z)  # [batch_size]
-    b11 = ms2.squeeze() + 2.0 * y * y  # [batch_size]
-    b12 = 2.0 * (s2s3 - x)  # [batch_size]
-    b20 = 2.0 * (s1s3 - y)  # [batch_size]
-    b21 = 2.0 * (s2s3 + x)  # [batch_size]
-    b22 = ms2.squeeze() + 2.0 * z * z  # [batch_size]
-
-    # Stack elements into [batch_size, 3, 3] tensor
-    b_mat = torch.stack(
-        [
-            torch.stack([b00, b01, b02], dim=-1),
-            torch.stack([b10, b11, b12], dim=-1),
-            torch.stack([b20, b21, b22], dim=-1)
-        ],
-        dim=-2,
-    )  # [batch_size, 3, 3]
-
-    return b_mat
+    return term1 + term2 + term3
 
 
 def to_rotation_matrix(mrp: torch.Tensor) -> torch.Tensor:
@@ -138,7 +115,7 @@ def to_rotation_matrix(mrp: torch.Tensor) -> torch.Tensor:
     return res
 
 
-def addMRP(q1: torch.Tensor, q2: torch.Tensor) -> torch.Tensor:
+def add_mrp(q1: torch.Tensor, q2: torch.Tensor) -> torch.Tensor:
     dot1 = torch.sum(q1 * q1, dim=-1, keepdim=True)  # ...,1
     dot2 = torch.sum(q2 * q2, dim=-1, keepdim=True)  # ...,1
     dot12 = torch.sum(q1 * q2, dim=-1, keepdim=True)  # ...,1
@@ -166,3 +143,29 @@ def addMRP(q1: torch.Tensor, q2: torch.Tensor) -> torch.Tensor:
         q = torch.where(large_norm_mask, -q / q_norm_sq, q)
 
     return q
+
+
+def sub_mrp(q1: torch.Tensor, q2: torch.Tensor) -> torch.Tensor:
+    dot1 = torch.sum(q1 * q1, dim=-1, keepdim=True)  # ...,1
+    dot2 = torch.sum(q2 * q2, dim=-1, keepdim=True)  # ...,1
+    dot12 = torch.sum(q1 * q2, dim=-1, keepdim=True)  # ...,1
+    den = 1 + dot1 * dot2 + 2 * dot12
+
+    mask = torch.abs(den) < 0.1
+    if mask.any():
+        q1_new = -q1 / dot1
+        q1 = torch.where(mask, q1_new, q2)
+        den = 1 + dot1 * dot2 + 2 * dot12
+
+    cross = torch.cross(q1, q2)
+    term1 = (1 - (dot2)) * q1
+    term2 = 2 * cross
+    term3 = (1 - (dot1)) * q2
+
+    result = term1 + term2 - term3
+    result = result / den
+
+    norm2 = torch.sum(result * result, dim=-1, keepdim=True)
+    result = torch.where(norm2 > 1.0, -result / norm2, result)
+
+    return result

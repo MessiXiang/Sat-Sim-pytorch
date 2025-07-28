@@ -7,7 +7,7 @@ from typing import TypedDict
 import todd
 
 
-class StateDict(TypedDict):
+class TimerStateDict(TypedDict):
     step: int
 
 
@@ -30,22 +30,22 @@ class Timer(todd.utils.StateDictMixin):
     def step_count(self) -> int:
         return self._step
 
-    def reset(self) -> None:
-        self._step = 0
-
     @property
     def time(self) -> float:
         return self._start_time + self._step * self._dt
 
+    def reset(self) -> None:
+        self._step = 0
+
     def step(self) -> None:
         self._step += 1
 
-    def state_dict(self, *args, **kwargs) -> StateDict:
-        return StateDict(step=self._step)
+    def state_dict(self, *args, **kwargs) -> TimerStateDict:
+        return TimerStateDict(step=self._step)
 
     def load_state_dict(
         self,
-        state_dict: StateDict,
+        state_dict: TimerStateDict,
         *args,
         **kwargs,
     ) -> todd.utils.Keys | None:

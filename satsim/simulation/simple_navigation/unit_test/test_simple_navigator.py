@@ -7,7 +7,7 @@ from satsim.simulation.simple_navigation.simple_navigator import (
     SimpleNavigatorStateDict,
     AttitudeData,
     TranslationData,
-    addMRP,
+    add_mrp,
     to_rotation_matrix,
 )
 
@@ -201,7 +201,7 @@ def test_apply_errors():
                           torch.tensor([0.2, 0.0, 0.0]))
 
     # 验证姿态误差应用
-    expected_attitude = addMRP(attitude, navigation_errors[6:9])
+    expected_attitude = add_mrp(attitude, navigation_errors[6:9])
     assert torch.allclose(attitude_data["mrp_attitude_in_inertial"],
                           expected_attitude)
 
@@ -228,21 +228,21 @@ def test_addMRP_function():
     # 测试零加零
     q1 = torch.zeros(3)
     q2 = torch.zeros(3)
-    result = addMRP(q1, q2)
+    result = add_mrp(q1, q2)
     assert torch.allclose(result, torch.zeros(3))
 
     # 测试零加非零
     q2 = torch.tensor([0.1, 0.2, 0.3])
-    result = addMRP(q1, q2)
+    result = add_mrp(q1, q2)
     assert torch.allclose(result, q2)
 
     # 测试非零加零
-    result = addMRP(q2, q1)
+    result = add_mrp(q2, q1)
     assert torch.allclose(result, q2)
 
     # 测试两个非零相加
     q1 = torch.tensor([0.3, 0.2, 0.1])
-    result = addMRP(q1, q2)
+    result = add_mrp(q1, q2)
 
     # 验证结果是否在MRP定义域内 (模长<=1)
     norm_sq = torch.sum(result**2)

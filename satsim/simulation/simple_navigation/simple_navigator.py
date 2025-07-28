@@ -10,7 +10,7 @@ from typing import TypedDict
 import torch
 
 from satsim.architecture import Module
-from satsim.utils import addMRP, to_rotation_matrix
+from satsim.utils import to_rotation_matrix
 
 
 class AttitudeData(TypedDict):
