@@ -59,13 +59,12 @@ class MrpSteering(Module[MrpSteeringDict]):
             sigma_BR)
         if not self._ignore_outer_loop_feed_forward:
             B = Bmat(sigma_BR)
-            sigma_p = 0.25 * torch.mv(
+            sigma_p = 0.25 * torch.matmul(
                 B,
-                omega_body_relative_to_reference_in_body_frame,
-            )
+                omega_body_relative_to_reference_in_body_frame.unsqueeze(-1),
+            ).squeeze(-1)
 
-            numerator = 3 * K3 * (attitude_errors_relative_to_reference**
-                                  2) + K1
+            numerator = 3 * self._k3 * (sigma_BR**2) + self._k1
             denominator = (inner_value**2) + 1.0
             angular_acceleration_relative_to_reference_in_body_frame = -(
                 numerator / denominator) * sigma_p
