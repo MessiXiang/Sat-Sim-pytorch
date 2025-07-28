@@ -7,3 +7,6 @@ build/
 .mypy_cache/
 *.so
 .vscode/
+*.tpc
+*.tls
+*.bsp
