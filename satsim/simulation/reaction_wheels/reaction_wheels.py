@@ -4,6 +4,7 @@ __all__ = [
     'HoneywellHR12Large',
     'HoneywellHR12Medium',
     'HoneywellHR12Small',
+    'expand',
 ]
 from dataclasses import dataclass, fields
 from enum import IntEnum
@@ -58,21 +59,23 @@ class ReactionWheel:
             max_power_efficiency=max_power_efficiency,
         )
 
-    def expand(
-        size: Iterable[int],
-        reaction_wheels: list['ReactionWheel'],
-    ) -> list['ReactionWheel']:
 
-        for reaction_wheel in reaction_wheels:
-            for field in fields(ReactionWheel):
-                attr = field.name
-                value = getattr(reaction_wheel, attr)
-                if isinstance(value, list):
-                    raise TypeError(f"{attr} is already a list.")
-                value = torch.full(list(size), value).tolist()
-                setattr(reaction_wheel, attr, value)
+def expand(
+    size: Iterable[int],
+    reaction_wheels: Iterable[ReactionWheel],
+) -> list[ReactionWheel]:
+    reaction_wheels = list(reaction_wheels)
 
-        return reaction_wheels
+    for reaction_wheel in reaction_wheels:
+        for field in fields(ReactionWheel):
+            attr = field.name
+            value = getattr(reaction_wheel, attr)
+            if isinstance(value, list):
+                raise TypeError(f"{attr} is already a list.")
+            value = torch.full(list(size), value).tolist()
+            setattr(reaction_wheel, attr, value)
+
+    return reaction_wheels
 
 
 class HoneywellHR12Large(ReactionWheel):

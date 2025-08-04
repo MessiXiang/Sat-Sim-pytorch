@@ -26,7 +26,7 @@ def test_mrp_feedback_with_reaction_wheel(
         ki=integral_gain,
         p=150.0,
         integral_limit=integral_limit,
-        control_law_Type=control_law_type,
+        control_law_type=control_law_type,
     )
     mrp_feedback_state_dict = mrp_feedback.reset()
     mrp_feedback_state_dict['known_torque_point_b_body'] = torch.ones(3)
@@ -94,7 +94,7 @@ def test_mrp_feedback_without_reaction_wheel(
         ki=integral_gain,
         p=150.0,
         integral_limit=integral_limit,
-        control_law_Type=control_law_type,
+        control_law_type=control_law_type,
     )
     mrp_feedback_state_dict = mrp_feedback.reset()
     mrp_feedback_state_dict['known_torque_point_b_body'] = torch.ones(3)

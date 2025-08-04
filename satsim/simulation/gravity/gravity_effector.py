@@ -1,7 +1,7 @@
 __all__ = [
     'GravityField',
 ]
-from typing import Iterable
+from typing import TYPE_CHECKING, Iterable
 
 import torch
 from torch import Tensor
@@ -35,7 +35,8 @@ class GravityField(Module[VoidStateDict]):
 
         gravity_bodies_names: list[str] = []
         self._central_body_name: str | None = None
-        for gravity_body in gravity_bodies:
+        self._central_gravity_body_idx: str | None = None
+        for idx, gravity_body in enumerate(gravity_bodies):
             gravity_body_name = string_normalizer(gravity_body.name)
             if gravity_body_name in gravity_bodies_names:
                 raise ValueError('Multiple body have same name')
@@ -44,11 +45,15 @@ class GravityField(Module[VoidStateDict]):
                 if self._central_body_name is not None:
                     raise ValueError('Multiple central body')
                 self._central_body_name = gravity_body_name
+                self._central_gravity_body_idx = idx
 
             gravity_bodies_names.append(gravity_body_name)
             self.add_module(f'_gravity_body_{gravity_body_name}', gravity_body)
 
         self._gravity_bodies_names = gravity_bodies_names
+
+    def get_gravity_body(self, gravity_body_name: str):
+        return self.get_submodule(f'_gravity_body_{gravity_body_name}')
 
     @property
     def gravity_bodies_names(self) -> list[str]:
@@ -67,13 +72,6 @@ class GravityField(Module[VoidStateDict]):
             return None
 
         return self.get_submodule(f'_gravity_body_{self._central_body_name}')
-
-    @property
-    def central_gravity_body_idx(self) -> int | None:
-        if self._central_body_name is None:
-            return None
-
-        return self._gravity_bodies_names.index(self._central_body_name)
 
     def _load_ephemeris(self, target: torch.Tensor) -> None:
 
@@ -110,7 +108,7 @@ class GravityField(Module[VoidStateDict]):
         if self.central_gravity_body is not None:
             position_spacecraft_in_inertial = \
                 position_spacecraft_wrt_central_point_in_inertial + \
-                self._gravity_bodies_position_in_inertial[..., self.central_gravity_body_idx, :]
+                self._gravity_bodies_position_in_inertial[..., self._central_gravity_body_idx, :]
         else:
             position_spacecraft_in_inertial = \
                 position_spacecraft_wrt_central_point_in_inertial
@@ -135,7 +133,7 @@ class GravityField(Module[VoidStateDict]):
                     and self._central_body_name != gravity_body_name):
                 relative_position_gravity_body = \
                     self._gravity_bodies_position_in_inertial[...,idx,:] \
-                    - self._gravity_bodies_position_in_inertial[...,self.central_gravity_body_idx,:]
+                    - self._gravity_bodies_position_in_inertial[...,self._central_gravity_body_idx,:]
 
                 _, (acceleration_central_body, ) = gravity_body(
                     relative_position=relative_position_gravity_body)
@@ -181,7 +179,7 @@ class GravityField(Module[VoidStateDict]):
         """
         position_central_body_in_inertial = \
             self._gravity_bodies_position_in_inertial[
-            ..., self.central_gravity_body_idx, :]  # [b, 1, 3]
+            ..., self._central_gravity_body_idx, :]  # [b, 1, 3]
 
         position_spacecraft_in_inertial = (
             position_spacecraft_wrt_central_body_in_inertial +
@@ -190,7 +188,7 @@ class GravityField(Module[VoidStateDict]):
         velocity_spacecraft_in_inertial = (
             velocity_spacecraft_wrt_central_body_in_inertial +
             self._gravity_bodies_ephemeris['velocity_in_inertial'][
-                ..., self.central_gravity_body_idx, :])
+                ..., self._central_gravity_body_idx, :])
 
         return (
             position_spacecraft_in_inertial,

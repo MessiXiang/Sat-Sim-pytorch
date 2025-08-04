@@ -1,11 +1,12 @@
 __all__ = ['GravityBody', 'PointMassGravityBody']
 
 from abc import ABC, abstractmethod
+from typing import Self
 
 import torch
 from torch import Tensor
 
-from satsim.architecture import Module, VoidStateDict
+from satsim.architecture import Module, VoidStateDict, constants
 
 
 class GravityBody(Module[VoidStateDict], ABC):
@@ -16,28 +17,18 @@ class GravityBody(Module[VoidStateDict], ABC):
         name: str,
         gm: float,
         equatorial_radius: float,
-        polar_radius: float,
+        polar_radius: float | None = None,
         is_central: bool = False,
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
         self._name = name
-        self.register_buffer(
-            '_gm',
-            torch.tensor([gm]),
-            persistent=False,
-        )
-        self.register_buffer(
-            '_equatorial_radius',
-            torch.tensor([equatorial_radius]),
-            persistent=False,
-        )
-        self.register_buffer(
-            '_polar_radius',
-            torch.tensor([polar_radius]),
-            persistent=False,
-        )
+        if polar_radius is None:
+            polar_radius = equatorial_radius
 
+        self._gm = gm
+        self._equatorial_radius = equatorial_radius
+        self._polar_radius = polar_radius
         self._is_central = is_central
 
     @property
@@ -71,6 +62,24 @@ class GravityBody(Module[VoidStateDict], ABC):
         """
         pass
 
+    @classmethod
+    def create_sun(cls, **kwargs) -> Self:
+        return cls(
+            name='SUN',
+            gm=constants.MU_SUN * 1e9,
+            equatorial_radius=constants.REQ_SUN,
+            **kwargs,
+        )
+
+    @classmethod
+    def create_earth(cls, **kwargs) -> Self:
+        return cls(
+            name='EARTH',
+            gm=constants.MU_EARTH * 1e9,
+            equatorial_radius=constants.REQ_EARTH,
+            **kwargs,
+        )
+
 
 class PointMassGravityBody(GravityBody):
 
@@ -99,8 +108,8 @@ class PointMassGravityBody(GravityBody):
         """
 
         r = torch.norm(relative_position, dim=-1, keepdim=True)
-        gm = self.get_buffer('_gm')
-        force_magnitude = -gm / (r**3)  # [b, num_position, 1]
+
+        force_magnitude = -self._gm / (r**3)  # [b, num_position, 1]
         grav_field = force_magnitude * relative_position
         if grav_field.dim() > 1:
             grav_field = grav_field.sum(-2)

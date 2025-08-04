@@ -15,11 +15,11 @@ class MRPFeedback(Module[MRPFeedbackStateDict]):
     def __init__(
         self,
         *args,
-        k: float,
-        ki: float,
-        p: float,
-        integral_limit: float,
-        control_law_Type: int,
+        k: torch.Tensor,
+        ki: torch.Tensor,
+        p: torch.Tensor,
+        integral_limit: torch.Tensor,
+        control_law_type: torch.BoolTensor,
         inertia_spacecraft_point_b_in_body: torch.Tensor,
         reaction_wheels_inertia_wrt_spin: torch.Tensor,
         reaction_wheels_spin_axis: torch.Tensor,
@@ -27,16 +27,25 @@ class MRPFeedback(Module[MRPFeedbackStateDict]):
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
-        self.k = k
-        self.ki = ki
-        self.p = p
-        self.integral_limit = integral_limit
-        self.control_law_type = control_law_Type
+        self.control_law_type = control_law_type
 
         known_torque_point_b_in_body = torch.zeros(
             1
         ) if known_torque_point_b_in_body is None else known_torque_point_b_in_body
 
+        self.register_buffer('k', k, persistent=False)
+        self.register_buffer('ki', ki, persistent=False)
+        self.register_buffer('p', p, persistent=False)
+        self.register_buffer(
+            'integral_limit',
+            integral_limit,
+            persistent=False,
+        )
+        self.register_buffer(
+            'control_law_type',
+            control_law_type,
+            persistent=False,
+        )
         self.register_buffer(
             'known_torque_point_b_in_body',
             known_torque_point_b_in_body,
@@ -80,6 +89,11 @@ class MRPFeedback(Module[MRPFeedbackStateDict]):
     ]:
 
         integral_sigma = state_dict['integral_sigma']
+        k = self.get_buffer('k')
+        ki = self.get_buffer('ki')
+        p = self.get_buffer('p')
+        integral_limit = self.get_buffer('integral_limit')
+        control_law_type = self.get_buffer('control_law_type')
         inertia_spacecraft_point_b_in_body = self.get_buffer(
             'inertia_spacecraft_point_b_in_body')
         known_torque_point_b_in_body = self.get_buffer(
@@ -93,21 +107,32 @@ class MRPFeedback(Module[MRPFeedbackStateDict]):
 
         omega_BN_B = omega_BR_B + omega_RN_B
         z = torch.zeros_like(omega_BN_B)
-        if self.ki > 0:
-            integral_sigma = integral_sigma + self.k * dt * sigma_BR
-            integral_sigma = torch.clamp(
-                integral_sigma,
-                min=-self.integral_limit,
-                max=self.integral_limit,
-            )
-            state_dict['integral_sigma'] = integral_sigma
-            z = integral_sigma + torch.matmul(
+
+        integral_mask = ki > 0
+        integral_sigma = torch.where(integral_mask,
+                                     integral_sigma + k * dt * sigma_BR,
+                                     integral_sigma)
+        clamp_mask = integral_mask & (torch.abs(integral_sigma)
+                                      > integral_limit)
+        integral_sigma = torch.where(
+            clamp_mask,
+            torch.copysign(integral_limit, integral_sigma),
+            integral_sigma,
+        )
+
+        state_dict['integral_sigma'] = integral_sigma
+
+        z = torch.where(
+            integral_mask,
+            integral_sigma + torch.matmul(
                 inertia_spacecraft_point_b_in_body,
                 omega_BR_B.unsqueeze(-1),
-            ).squeeze(-1)  # [b, 3]
+            ).squeeze(-1),  # [b, 3]
+            z,
+        )
 
-        integral_feedback_output = z * self.ki * self.p
-        attitude_control_torque = sigma_BR * self.k + omega_BR_B * self.p + integral_feedback_output
+        integral_feedback_output = z * ki * p  # v3_5
+        attitude_control_torque = sigma_BR * k + omega_BR_B * p + integral_feedback_output
 
         temp1 = torch.matmul(
             inertia_spacecraft_point_b_in_body,
@@ -119,7 +144,11 @@ class MRPFeedback(Module[MRPFeedbackStateDict]):
             reaction_wheels_spin_axis,
         ) + wheel_speeds) * reaction_wheels_spin_axis).sum(-1) + temp1
 
-        temp2 = omega_RN_B + z * self.ki if self.control_law_type == 0 else omega_BN_B
+        temp2 = torch.where(
+            control_law_type,
+            omega_BN_B,
+            omega_RN_B + z * ki,
+        )
         attitude_control_torque = attitude_control_torque + torch.cross(
             temp1,
             temp2,
