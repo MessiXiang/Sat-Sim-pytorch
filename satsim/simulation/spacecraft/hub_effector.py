@@ -13,12 +13,11 @@ from ..base.state_effector import BackSubMatrices, MassProps, BaseStateEffector,
 
 
 class HubEffectorDynamicParams(TypedDict):
-    pos: torch.Tensor  # [3]
+    position: torch.Tensor  # [3]
     velocity: torch.Tensor  # [3]
-    sigma: torch.Tensor  # [3]
-    omega: torch.Tensor  # [3]
+    attitude: torch.Tensor  # [3]
+    angular_velocity: torch.Tensor  # [3]
     grav_velocity: torch.Tensor  # [3]
-    grav_velocity_bc: torch.Tensor  # [3]
 
 
 HubEffectorStateDict = StateEffectorStateDict[HubEffectorDynamicParams]
@@ -31,54 +30,55 @@ class HubEffector(
     def __init__(
         self,
         *args,
-        mass: torch.Tensor | None = None,
-        moment_of_inertia_matrix_wrt_body_point: torch.Tensor | None = None,
-        pos: torch.Tensor | None = None,
-        velocity: torch.Tensor | None = None,
-        sigma: torch.Tensor | None = None,
-        omega: torch.Tensor | None = None,
+        mass: torch.Tensor,
+        moment_of_inertia_matrix_wrt_body_point: torch.Tensor,
+        position: torch.Tensor,
+        velocity: torch.Tensor,
+        attitude: torch.Tensor | None = None,
+        angular_velocity: torch.Tensor | None = None,
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
-
-        mass = torch.tensor([1.]) if mass is None else mass
-        moment_of_inertia_matrix_wrt_body_point = torch.eye(
-            3, 3
-        ) if moment_of_inertia_matrix_wrt_body_point is None else \
-        moment_of_inertia_matrix_wrt_body_point
-
         self.register_buffer(
-            'mass',
+            '_mass',
             mass,
             persistent=False,
         )
         self.register_buffer(
-            'moment_of_inertia_matrix_wrt_body_point',
+            '_moment_of_inertia_matrix_wrt_body_point',
             moment_of_inertia_matrix_wrt_body_point,
             persistent=False,
         )
 
-        self.pos_init = torch.zeros(3) if pos is None else pos
-        self.velocity_init = torch.zeros(3) if velocity is None else velocity
-        self.sigma_init = torch.zeros(3) if sigma is None else sigma
-        self.omega_init = torch.zeros(3) if omega is None else omega
+        self._position_init = position
+        self._velocity_init = velocity
+        self._attitude_init = torch.zeros(3) if attitude is None else attitude
+        self._angular_velocity_init = torch.zeros(
+            3) if angular_velocity is None else angular_velocity
+
+    @property
+    def mass(self) -> torch.Tensor:
+        return self.get_buffer('_mass')
+
+    @property
+    def moment_of_inertia_matrix_wrt_body_point(self) -> torch.Tensor:
+        return self.get_buffer('_moment_of_inertia_matrix_wrt_body_point')
 
     def reset(self) -> HubEffectorStateDict:
         state_dict = super().reset()
 
         mass_props: MassProps = dict(
-            mass=self.get_buffer('mass'),
-            moment_of_inertia_matrix_wrt_body_point=self.get_buffer(
-                'moment_of_inertia_matrix_wrt_body_point'),
+            mass=self.mass,
+            moment_of_inertia_matrix_wrt_body_point=self.
+            moment_of_inertia_matrix_wrt_body_point,
         )
 
         dynamic_params = HubEffectorDynamicParams(
-            pos=self.pos_init.clone(),
-            velocity=self.velocity_init.clone(),
-            sigma=self.sigma_init.clone(),
-            omega=self.omega_init.clone(),
-            grav_velocity=self.velocity_init.clone(),
-            grav_velocity_bc=self.velocity_init.clone(),
+            position=self._position_init.clone(),
+            velocity=self._velocity_init.clone(),
+            attitude=self._attitude_init.clone(),
+            angular_velocity=self._angular_velocity_init.clone(),
+            grav_velocity=self._velocity_init.clone(),
         )
         state_dict.update(dynamic_params=dynamic_params, mass_props=mass_props)
 
@@ -96,11 +96,9 @@ class HubEffector(
         self,
         state_dict: HubEffectorStateDict,
         integrate_time_step: float,
-        g_N: torch.Tensor,
         back_substitution_matrices: BackSubMatrices,
-        rDDot_BN_N: torch.Tensor | None = None,
-        omegaDot_BN_B: torch.Tensor | None = None,
-        sigma_BN: torch.Tensor | None = None,
+        gravity_acceleration: torch.Tensor,
+        spacecraft_mass: torch.Tensor,
     ) -> HubEffectorDynamicParams:
         """
         Computes time derivatives of the hub's state, including position, angular velocity, and attitude derivatives.
@@ -116,102 +114,52 @@ class HubEffector(
         Returns:
             HubEffectorStateDict: Updated dictionary with computed state derivatives.
         """
-
         dynamic_params = state_dict['dynamic_params']
         velocity = dynamic_params['velocity']
-        sigma = dynamic_params['sigma']
-        omega = dynamic_params['omega']
+        attitude = dynamic_params['attitude']
+        angular_velocity = dynamic_params['angular_velocity']
 
-        vec_rot = back_substitution_matrices['vec_rot']
-        vec_trans = back_substitution_matrices['vec_trans']
-        matrix_a = back_substitution_matrices['matrix_a']
-        matrix_b = back_substitution_matrices['matrix_b']
-        matrix_c = back_substitution_matrices['matrix_c']
-        matrix_d = back_substitution_matrices['matrix_d']
+        ext_torque = back_substitution_matrices['ext_torque']
+        ext_force = back_substitution_matrices['ext_force']
+        moment_of_inertia_matrix = back_substitution_matrices[
+            'moment_of_inertia_matrtix']
 
-        #
-        sigma_dot = 0.25 * torch.matmul(
-            Bmat(sigma),
-            omega.unsqueeze(-1),
+        attitude_dot = 0.25 * torch.matmul(
+            Bmat(attitude),
+            angular_velocity.unsqueeze(-1),
         ).squeeze(-1)
 
-        dcm_NB = to_rotation_matrix(sigma)
+        dcm_NB = to_rotation_matrix(attitude)
 
-        intermediate_vector = vec_rot.unsqueeze(-1) - torch.matmul(
-            matrix_c,
-            torch.linalg.solve(
-                matrix_a,
-                vec_trans.unsqueeze(-1),
-            ),
-        )
-        intermediate_matrix = matrix_d - torch.matmul(
-            matrix_c,
-            torch.linalg.solve(
-                matrix_a,
-                matrix_b,
-            ),
-        )
-
-        omega_dot: torch.Tensor = torch.linalg.solve(
-            intermediate_matrix,
-            intermediate_vector,
+        angular_velocity_dot: torch.Tensor = torch.linalg.solve(
+            moment_of_inertia_matrix,
+            ext_torque.unsqueeze(-1),
         )
         velocity_dot = torch.matmul(
             dcm_NB,
-            torch.linalg.solve(
-                matrix_a,
-                vec_trans.unsqueeze(-1) - torch.matmul(matrix_b, omega_dot),
-            ),
-        ).squeeze(-1)
-        grav_velocity_dot = g_N
-        grav_velocity_bc_dot = g_N
-        pos_dot = velocity.clone()
+            ext_force.unsqueeze(-1) / spacecraft_mass,
+        ) + gravity_acceleration
+        grav_velocity_dot = gravity_acceleration
+        position_dot = velocity.clone()
 
         return HubEffectorDynamicParams(
-            pos=pos_dot,
-            velocity=velocity_dot,
-            sigma=sigma_dot,
-            omega=omega_dot.squeeze(-1),
+            position=position_dot,
+            velocity=velocity_dot.squeeze(-1),
+            attitude=attitude_dot,
+            omega=angular_velocity_dot.squeeze(-1),
             grav_velocity=grav_velocity_dot,
-            grav_velocity_bc=grav_velocity_bc_dot,
         )
-
-    def update_energy_momentum_contributions(
-        self,
-        state_dict: HubEffectorStateDict,
-        integrate_time_step: float,
-        rotAngMomPntCContr_B: torch.Tensor,
-        rotEnergyContr: torch.Tensor,
-        omega_BN_B: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        moment_of_inertia_matrix_wrt_body_point = self.get_buffer(
-            'moment_of_inertia_matrix_wrt_body_point')
-        dynamic_params = state_dict['dynamic_params']
-        omega = dynamic_params['omega']
-
-        rotAngMomPntCContr_B = torch.matmul(
-            moment_of_inertia_matrix_wrt_body_point,
-            omega.unsqueeze(-1),
-        ).squeeze(-1)
-
-        rotEnergyContr = 0.5 * (omega.dot(
-            torch.matmul(
-                moment_of_inertia_matrix_wrt_body_point,
-                omega.unsqueeze(-1),
-            ).squeeze(-1)))
-
-        return rotAngMomPntCContr_B, rotEnergyContr
 
     def modify_states(
         self,
         state_dict: HubEffectorStateDict,
         integrate_time_step: float,
     ) -> HubEffectorStateDict:
-        sigma = state_dict['dynamic_params']['sigma']
+        sigma = state_dict['dynamic_params']['attitude']
         sigma_norm = sigma.norm()
         if sigma_norm > 1:
             sigma = -sigma / sigma_norm
-            state_dict['dynamic_params']['sigma'] = sigma
+            state_dict['dynamic_params']['attitude'] = sigma
             # mrp_switch_count += 1
 
         return state_dict
@@ -219,10 +167,8 @@ class HubEffector(
     def match_gravity_to_velocity_state(
         self,
         state_dict: HubEffectorStateDict,
-        v_CN_N: torch.Tensor,
     ) -> HubEffectorStateDict:
         dynamic_params = state_dict['dynamic_params']
 
         dynamic_params['grav_velocity'] = dynamic_params['velocity'].clone()
-        dynamic_params['grav_velocity_bc'] = v_CN_N
         return state_dict

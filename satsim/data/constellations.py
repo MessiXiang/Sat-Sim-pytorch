@@ -20,17 +20,15 @@ __all__ = [
 import dataclasses
 import math
 import random
-from collections import UserDict
 from enum import IntEnum, auto
 from typing import Any, TypedDict, cast
 from typing_extensions import Self
 
 import torch
-from todd.patches.py_ import json_dump, json_load
 
 from ..simulation.reaction_wheels.reaction_wheels import SpinAxis
 
-from .orbits import OrbitalElements, OrbitDict
+from .orbits import OrbitalElements
 
 # TODO: rename properties
 

@@ -26,7 +26,7 @@ def test_translation(device: str):
     spacecraft = Spacecraft(
         timer=timer,
         mass=torch.tensor([100.], dtype=torch.float64),
-        pos=torch.tensor(
+        position=torch.tensor(
             [-4020338.690396649, 7490566.741852513, 5248299.211589362],
             dtype=torch.float64,
         ),
@@ -118,11 +118,11 @@ def test_translation_and_rotation(device: str):
             [0.0, 200, 0.0],
             [0.0, 0.0, 300],
         ]),
-        pos=torch.tensor(
+        position=torch.tensor(
             [-4020338.690396649, 7490566.741852513, 5248299.211589362], ),
         velocity=torch.tensor(
             [-5199.77710904224, -3436.681645356935, 1041.576797498721], ),
-        omega=torch.tensor([0.5, -0.4, 0.7]),
+        angular_velocity=torch.tensor([0.5, -0.4, 0.7]),
         gravity_field=gravity_field,
     )
     timer.reset()

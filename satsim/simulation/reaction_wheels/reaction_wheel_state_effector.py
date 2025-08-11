@@ -4,21 +4,32 @@ from typing import Iterable, TypedDict
 
 import torch
 import torch.nn.functional as F
+from torch import Tensor
 
-from ..base import BackSubMatrices, BaseStateEffector, StateEffectorStateDict
+from ..base import (
+    BackSubMatrices,
+    BaseStateEffector,
+    StateEffectorStateDict,
+    BatteryStateDict,
+    PowerNodeMixin,
+)
 from .reaction_wheels import ReactionWheel
 
 
 class ReactionWheelsDynamicParams(TypedDict):
-    angular_velocity: torch.Tensor
+    angular_velocity: Tensor
 
 
 class ReactionWheelsStateDict(
         StateEffectorStateDict[ReactionWheelsDynamicParams]):
-    current_torque: torch.Tensor
+    current_torque: Tensor
+    power_status: Tensor
 
 
-class ReactionWheels(BaseStateEffector[ReactionWheelsStateDict]):
+class ReactionWheels(
+        BaseStateEffector[ReactionWheelsStateDict],
+        PowerNodeMixin,
+):
 
     def __init__(
         self,
@@ -29,8 +40,9 @@ class ReactionWheels(BaseStateEffector[ReactionWheelsStateDict]):
         super().__init__(*args, **kwargs)
 
         reaction_wheels = list(reaction_wheels)
-        if len(reaction_wheels) == 0:
-            raise ValueError("Reaction Wheel list cannot be empty")
+        if len(reaction_wheels) != 3:
+            raise ValueError(
+                "Reaction Wheel list must contain three reaction_wheels")
 
         states = {
             field.name:
@@ -52,13 +64,82 @@ class ReactionWheels(BaseStateEffector[ReactionWheelsStateDict]):
 
         self.angular_velocity_init = states.pop('angular_velocity_init')
 
-        states['spin_axis_in_body'] = F.one_hot(
-            states['spin_axis_in_body'].squeeze(-2),
-            num_classes=3,
-        ).transpose(-1, -2).float()
+        self.register_buffer(
+            '_moment_of_inertia_wrt_spin',
+            states['moment_of_inertia_wrt_spin'],
+            persistent=False,
+        )
+        self.register_buffer(
+            '_max_torque',
+            states['max_torque'],
+            persistent=False,
+        )
+        self.register_buffer(
+            '_mass',
+            states['mass'],
+            persistent=False,
+        )
+        self.register_buffer(
+            '_max_angular_velocity',
+            states['max_angular_velocity'],
+            persistent=False,
+        )
+        self.register_buffer(
+            '_max_power_efficiency',
+            states['max_power_efficiency'],
+            persistent=False,
+        )
+        self.register_buffer(
+            '_base_power',
+            states['base_power'],
+            persistent=False,
+        )
+        self.register_buffer(
+            '_elec_to_mech_efficiency',
+            states['elec_to_mech_efficiency'],
+            persistent=False,
+        )
+        self.register_buffer(
+            '_mech_to_elec_efficiency',
+            states['mech_to_elec_efficiency'],
+            persistent=False,
+        )
 
-        for attr, value in states.items():
-            self.register_buffer(attr, value, persistent=False)
+    @property
+    def spin_axis_in_body(self) -> Tensor:
+        return torch.eye(3, 3).to(self.mass)
+
+    @property
+    def moment_of_inertia_wrt_spin(self) -> Tensor:
+        return self.get_buffer('_moment_of_inertia_wrt_spin')
+
+    @property
+    def max_torque(self) -> Tensor:
+        return self.get_buffer('_max_torque')
+
+    @property
+    def mass(self) -> Tensor:
+        return self.get_buffer('_mass')
+
+    @property
+    def max_angular_velocity(self) -> Tensor:
+        return self.get_buffer('_max_angular_velocity')
+
+    @property
+    def max_power_efficiency(self) -> Tensor:
+        return self.get_buffer('_max_power_efficiency')
+
+    @property
+    def base_power(self) -> Tensor:
+        return self.get_buffer('_base_power')
+
+    @property
+    def elec_to_mech_efficiency(self) -> Tensor:
+        return self.get_buffer('_elec_to_mech_efficiency')
+
+    @property
+    def mech_to_elec_efficiency(self) -> Tensor:
+        return self.get_buffer('_mech_to_elec_efficiency')
 
     def reset(self) -> ReactionWheelsStateDict:
         state_dict = super().reset()
@@ -72,30 +153,28 @@ class ReactionWheels(BaseStateEffector[ReactionWheelsStateDict]):
     def update_back_substitution_contribution(
         self,
         state_dict: ReactionWheelsStateDict,
-        integrate_time_step: float,
         back_substitution_contribution: BackSubMatrices,
-        sigma_BN: torch.Tensor,
-        angular_velocity_BN_B: torch.Tensor,
-        g_N: torch.Tensor,
+        angular_velocity_BN_B: Tensor,
     ) -> BackSubMatrices:
         angular_velocity = state_dict['dynamic_params']['angular_velocity']
         current_torque = state_dict['current_torque']
-        moment_of_inertia_wrt_spin = self.get_buffer(
-            'moment_of_inertia_wrt_spin')
-        spin_axis_in_body = self.get_buffer('spin_axis_in_body')
 
         back_substitution_contribution[
-            'matrix_d'] = back_substitution_contribution['matrix_d'] - (
-                moment_of_inertia_wrt_spin *
-                (spin_axis_in_body.unsqueeze(-2) *
-                 spin_axis_in_body.unsqueeze(-3)).sum(-1))
+            'moment_of_inertia_matrtix'] = back_substitution_contribution[
+                'moment_of_inertia_matrtix'] - (
+                    self.moment_of_inertia_wrt_spin * torch.einsum(
+                        '... a n, ... b n -> ... a b',
+                        self.spin_axis_in_body,
+                        self.spin_axis_in_body,
+                    ))
 
         back_substitution_contribution[
-            'vec_rot'] = back_substitution_contribution['vec_rot'] - (
-                spin_axis_in_body * current_torque +
-                moment_of_inertia_wrt_spin * angular_velocity * torch.cross(
+            'ext_torque'] = back_substitution_contribution['ext_torque'] - (
+                self.spin_axis_in_body * current_torque +
+                self.moment_of_inertia_wrt_spin * angular_velocity *
+                torch.cross(
                     angular_velocity_BN_B.unsqueeze(-1),
-                    spin_axis_in_body,
+                    self.spin_axis_in_body,
                     dim=-2,
                 )).sum(-1)
 
@@ -105,59 +184,100 @@ class ReactionWheels(BaseStateEffector[ReactionWheelsStateDict]):
         self,
         state_dict: ReactionWheelsStateDict,
         integrate_time_step: float,
-        rDDot_BN_N: torch.Tensor,
-        omegaDot_BN_B: torch.Tensor,
-        sigma_BN: torch.Tensor,
+        angular_velocity_dot: Tensor,
     ) -> ReactionWheelsDynamicParams:
         dynamic_params = state_dict['dynamic_params']
         current_torque = state_dict['current_torque']
-        moment_of_inertia_wrt_spin = self.get_buffer(
-            'moment_of_inertia_wrt_spin')
-        spin_axis_in_body = self.get_buffer('spin_axis_in_body')
 
-        angular_acceleration = current_torque / moment_of_inertia_wrt_spin - torch.matmul(
-            omegaDot_BN_B.unsqueeze(-2),
-            spin_axis_in_body,
-        )
+        angular_acceleration = \
+            current_torque / self.moment_of_inertia_wrt_spin - \
+            torch.matmul(
+                angular_velocity_dot.unsqueeze(-2),
+                self.spin_axis_in_body,
+            )
 
         dynamic_params['angular_velocity'] = angular_acceleration
         return dynamic_params
 
+    # deserted
     def update_energy_momentum_contributions(
         self,
         state_dict: ReactionWheelsStateDict,
         integrate_time_step: float,
-        rotAngMomPntCContr_B: torch.Tensor,
-        rotEnergyContr: torch.Tensor,
-        angular_velocity_BN_B: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        moment_of_inertia_wrt_spin = self.get_buffer(
-            'moment_of_inertia_wrt_spin')
-        spin_axis_in_body = self.get_buffer('spin_axis_in_body')
+        rotAngMomPntCContr_B: Tensor,
+        rotEnergyContr: Tensor,
+        angular_velocity_BN_B: Tensor,
+    ) -> tuple[Tensor, Tensor]:
         angular_velocity = angular_velocity = state_dict['dynamic_params'][
             'angular_velocity']
 
-        rotAngMomPntCContr_B = (moment_of_inertia_wrt_spin *
-                                spin_axis_in_body *
+        rotAngMomPntCContr_B = (self.moment_of_inertia_wrt_spin *
+                                self.spin_axis_in_body *
                                 angular_velocity).sum(dim=-1)
         rotEnergyContr += (
-            1. / 2 * moment_of_inertia_wrt_spin * angular_velocity**2 +
-            moment_of_inertia_wrt_spin * angular_velocity * torch.matmul(
+            1. / 2 * self.moment_of_inertia_wrt_spin * angular_velocity**2 +
+            self.moment_of_inertia_wrt_spin * angular_velocity * torch.matmul(
                 angular_velocity_BN_B.unsqueeze(-2),
-                spin_axis_in_body,
+                self.spin_axis_in_body,
             )).sum()  # TODO: check dim
 
         return rotAngMomPntCContr_B, rotEnergyContr
+
+    def compute_power_usage(
+        self,
+        battery_state_dict: BatteryStateDict,
+        state_dict: ReactionWheelsStateDict,
+    ) -> tuple[BatteryStateDict, ReactionWheelsStateDict]:
+        angular_velocity = state_dict['dynamic_params']['angular_velocity']
+        current_torque = state_dict['current_torque']
+        wheel_power = angular_velocity * current_torque  # shape (batch_size, 1,num_reaction_wheels)
+
+        base_power_need = self.get_buffer(
+            '_base_power_need')  # shape (batch_size, 1, num_reaction_wheels, )
+        elec_to_mech_eff = self.get_buffer(
+            '_elec_to_mech_eff'
+        )  # shape (batch_size, 1, num_reaction_wheels, )
+        mech_to_elec_eff = self.get_buffer(
+            '_mech_to_elec_eff'
+        )  # shape (batch_size, 1, num_reaction_wheels, )
+
+        is_accel_mode = (mech_to_elec_eff < 0) | (
+            wheel_power > 0)  # shape (batch_size, 1, num_reaction_wheels)
+
+        accel_power = base_power_need + torch.abs(
+            wheel_power
+        ) / elec_to_mech_eff  # shape (batch_size, 1, num_reaction_wheels)
+        regen_power = base_power_need + mech_to_elec_eff * wheel_power  # shape (batch_size, 1, num_reaction_wheels)
+
+        total_power = torch.where(
+            is_accel_mode,
+            accel_power,
+            regen_power,
+        ).sum(-1).squeeze(-1)  # shape (n_s)
+
+        power_status, battery_state_dict = self.update_power_status(
+            -total_power,
+            battery_state_dict,
+        )
+
+        state_dict['current_torque'] = torch.where(
+            power_status.unsqueeze(-1).unsqueeze(-1),
+            current_torque,
+            0.,
+        )
+
+        return battery_state_dict, state_dict
 
     def forward(
         self,
         state_dict: ReactionWheelsStateDict,
         *args,
-        motor_torque: torch.Tensor | None = None,
+        power_storage_state_dict: BatteryStateDict,
+        motor_torque: Tensor,
         **kwargs,
     ) -> tuple[
             ReactionWheelsStateDict,
-            tuple,
+            tuple[BatteryStateDict],
     ]:
         """Processes the reaction wheel state and applies motor torque with constraints.
 
@@ -173,13 +293,13 @@ class ReactionWheels(BaseStateEffector[ReactionWheelsStateDict]):
                 including 'reaction_wheels' with fields 'max_torque', 'min_torque', 'max_power_efficiency', 'angular_velocity',
                 'max_angular_velocity', and 'dynamic_params' with 'angular_velocity'.
             *args: Variable length argument list (not used).
-            motor_torque (torch.Tensor | None, optional): Motor torque to apply to the reaction wheels.
+            motor_torque (Tensor | None, optional): Motor torque to apply to the reaction wheels.
                 If None, no torque is applied, and a zero tensor is returned in the output tuple.
                 Defaults to None.
             **kwargs: Additional keyword arguments (not used).
 
         Returns:
-            tuple[ReactionWheelStateEffectorStateDict, tuple[torch.Tensor]]:
+            tuple[ReactionWheelStateEffectorStateDict, tuple[Tensor]]:
                 - The updated `state_dict` with modified 'reaction_wheels' dictionary, including
                 'current_torque' (applied torque) and
                 updated 'angular_velocity' from dynamic parameters.
@@ -194,45 +314,44 @@ class ReactionWheels(BaseStateEffector[ReactionWheelsStateDict]):
             - **Speed saturation**: Sets torque to 0 if |angular_velocity| >= max_angular_velocity and torque increases speed.
             - The method assumes 'angular_velocity' in 'dynamic_params' is precomputed for updating 'angular_velocity'.
         """
-        max_torque = self.get_buffer('max_torque')
-        max_power_efficiency = self.get_buffer('max_power_efficiency')
         angular_velocity = state_dict['dynamic_params']['angular_velocity']
-        max_angular_velocity = self.get_buffer('max_angular_velocity')
 
-        if max_torque.dim() != motor_torque.dim():
+        if self.max_torque.dim() != motor_torque.dim():
             motor_torque = motor_torque.unsqueeze(-2)
 
-        torque_saturation_mask = max_torque > 0
+        torque_saturation_mask = self.max_torque > 0
         motor_torque = torch.where(
             torque_saturation_mask,
             torch.clamp(
                 motor_torque,
-                min=-max_torque,
-                max=max_torque,
+                min=-self.max_torque,
+                max=self.max_torque,
             ),
             motor_torque,
         )
 
-        power_saturation_mask = (max_power_efficiency > 0) & \
-            (torch.abs(motor_torque * angular_velocity) >=max_power_efficiency)
+        power_saturation_mask = (self.max_power_efficiency > 0) & \
+            (torch.abs(motor_torque * angular_velocity) >=self.max_power_efficiency)
         motor_torque = torch.where(
             power_saturation_mask,
             torch.copysign(
-                max_power_efficiency / angular_velocity,
+                self.max_power_efficiency / angular_velocity,
                 motor_torque,
             ),
             motor_torque,
         )
 
-        speed_saturation_mask = (max_angular_velocity > 0.) & \
-            (torch.abs(angular_velocity) >= max_angular_velocity ) & \
+        speed_saturation_mask = (self.max_angular_velocity > 0.) & \
+            (torch.abs(angular_velocity) >= self.max_angular_velocity ) & \
             (angular_velocity * motor_torque >= 0)
         motor_torque = torch.where(
             speed_saturation_mask,
             0.,
             motor_torque,
         )
-
         state_dict['current_torque'] = motor_torque
 
-        return state_dict, tuple()
+        power_storage_state_dict, state_dict = self.compute_power_usage(
+            battery_state_dict=power_storage_state_dict, state_dict=state_dict)
+
+        return state_dict, tuple(power_storage_state_dict)

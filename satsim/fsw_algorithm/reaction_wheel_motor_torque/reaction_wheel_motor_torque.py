@@ -10,42 +10,38 @@ class ReactionWheelMotorTorque(Module[VoidStateDict]):
         self,
         *args,
         control_axis: torch.Tensor,
-        reaction_wheel_spin_axis_in_body: torch.Tensor,
         **kwargs,
     ):
-        num_axis = control_axis.size(-1)
-        num_reaction_wheels = reaction_wheel_spin_axis_in_body.size(-1)
-        assert num_reaction_wheels > num_axis and num_axis <= 3
         self.register_buffer(
-            'control_axis',
+            '_control_axis',
             control_axis,
             persistent=False,
         )
-        self.register_buffer(
-            'reaction_wheel_spin_axis_in_body',
-            reaction_wheel_spin_axis_in_body,
-            persistent=False,
-        )
+
+    @property
+    def control_axis(self) -> torch.Tensor:
+        #[3, num_axis]
+        return self.get_buffer('_control_axis')
 
     def forward(
         self,
         *args,
         torque_request_body: torch.Tensor,  # [3]
+        reaction_wheel_spin_axis_in_body: torch.Tensor,
         **kwargs,
     ) -> tuple[VoidStateDict, tuple[torch.Tensor]]:
-        control_axis = self.get_buffer('control_axis')  # [3, num_axis]
-        reaction_wheel_spin_axis_in_body = self.get_buffer(
-            'reaction_wheel_spin_axis_in_body')  # [3, num_reaction_wheel]
+        num_axis = self.control_axis.size(-1)
+        num_reaction_wheels = reaction_wheel_spin_axis_in_body.size(-1)
+        assert num_reaction_wheels == num_axis <= 3
 
         torque_request_body = -torque_request_body  # [3]
 
         torque_axis = torch.matmul(
             torque_request_body.unsqueeze(-2),
-            control_axis,
+            self.control_axis,
         ).squeeze(-2)  # [num_axis]
-        CGs = torch.zeros_like(reaction_wheel_spin_axis_in_body)
         CGs = torch.matmul(
-            control_axis.transpose(-1, -2),
+            self.control_axis.transpose(-1, -2),
             reaction_wheel_spin_axis_in_body,
         )  # [num_axis, num_reaction_wheels]
 

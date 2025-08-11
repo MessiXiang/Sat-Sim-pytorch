@@ -1,13 +1,12 @@
 __all__ = [
-    'SpinAxis',
     'ReactionWheel',
     'HoneywellHR12Large',
     'HoneywellHR12Medium',
     'HoneywellHR12Small',
     'expand',
+    'concat',
 ]
 from dataclasses import dataclass, fields
-from enum import IntEnum
 from typing import Iterable, Self
 
 import torch
@@ -15,34 +14,35 @@ import torch
 from satsim.architecture import constants
 
 
-# [*batchsize, shape, num_reaction_wheel]
-class SpinAxis(IntEnum):
-    X = 0
-    Y = 1
-    Z = 2
-
-
 @dataclass
 class ReactionWheel:
-    #
-    spin_axis_in_body: SpinAxis | list[SpinAxis]  # [3]
-    angular_velocity_init: float | list[float]
+    # reaction wheel properties
+    mass: float | list[float]
     moment_of_inertia_wrt_spin: float | list[float]
     max_torque: float | list[float]
-    mass: float | list[float]
     max_angular_velocity: float | list[float]
     max_power_efficiency: float | list[float]
+
+    # power properties
+    base_power: float | list[float]
+    elec_to_mech_efficiency: float | list[float]
+    mech_to_elec_efficiency: float | list[float]
+
+    # dynamic params
+    angular_velocity_init: float | list[float]
 
     @classmethod
     def build(
         cls,
         *args,
-        spin_axis_in_body: SpinAxis,
-        max_momentum: float,
-        max_power_efficiency: float = -1.,  # turn off
-        max_angular_velocity: float = 0.,  # turn off 
-        max_torque: float = 0.,  # turn off
         mass: float = 1.,
+        max_momentum: float,
+        max_torque: float = 0.,  # turn off
+        max_angular_velocity: float = 0.,  # turn off 
+        max_power_efficiency: float = -1.,  # turn off
+        base_power: float = 0.,
+        elec_to_mech_efficiency: float = 1.,
+        mech_to_elec_efficiency: float = -1,
         angular_velocity_init: float = 0.,
         **kwargs,
     ) -> Self:
@@ -50,13 +50,15 @@ class ReactionWheel:
         moment_of_inertia_wrt_spin = max_momentum / max_angular_velocity
 
         return cls(
-            spin_axis_in_body=spin_axis_in_body,
             mass=mass,
-            angular_velocity_init=angular_velocity_init,
             moment_of_inertia_wrt_spin=moment_of_inertia_wrt_spin,
             max_torque=max_torque,
             max_angular_velocity=max_angular_velocity,
             max_power_efficiency=max_power_efficiency,
+            base_power=base_power,
+            elec_to_mech_efficiency=elec_to_mech_efficiency,
+            mech_to_elec_efficiency=mech_to_elec_efficiency,
+            angular_velocity_init=angular_velocity_init,
         )
 
 
@@ -78,16 +80,28 @@ def expand(
     return reaction_wheels
 
 
+def concat(reaction_wheels: Iterable[ReactionWheel]) -> ReactionWheel:
+
+    attr_dict = {
+        field.name: [
+            getattr(reaction_wheel, field.name)
+            for reaction_wheel in reaction_wheels
+        ]
+        for field in fields(ReactionWheel)
+    }
+    return ReactionWheel(**attr_dict)
+
+
 class HoneywellHR12Large(ReactionWheel):
 
     @classmethod
     def build(cls, *args, **kwargs) -> Self:
         return super().build(
             *args,
-            max_momentum=50.,
             mass=9.5,
-            max_angular_velocity=6000. * constants.RPM,
+            max_momentum=50.,
             max_torque=0.2,
+            max_angular_velocity=6000. * constants.RPM,
             **kwargs,
         )
 
@@ -98,10 +112,10 @@ class HoneywellHR12Medium(ReactionWheel):
     def build(cls, *args, **kwargs) -> Self:
         return super().build(
             *args,
-            max_momentum=25,
             mass=7.0,
-            max_angular_velocity=6000. * constants.RPM,
+            max_momentum=25,
             max_torque=0.2,
+            max_angular_velocity=6000. * constants.RPM,
             **kwargs,
         )
 
@@ -112,9 +126,9 @@ class HoneywellHR12Small(ReactionWheel):
     def build(cls, *args, **kwargs) -> Self:
         return super().build(
             *args,
-            max_momentum=12.,
             mass=6.0,
-            max_angular_velocity=6000. * constants.RPM,
+            max_momentum=12.,
             max_torque=0.2,
+            max_angular_velocity=6000. * constants.RPM,
             **kwargs,
         )

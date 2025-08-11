@@ -1,8 +1,8 @@
 __all__ = [
-    "GroundMapping",
-    "GroundMappingStateDict",
-    "GroundStateDict",
-    "AccessDict",
+    'GroundMapping',
+    'GroundMappingStateDict',
+    'GroundStateDict',
+    'AccessDict',
 ]
 
 from typing import TypedDict
@@ -38,13 +38,13 @@ class GroundMapping(Module[GroundMappingStateDict]):
 
     def __init__(self,
                  *args,
-                 minimum_Elevation: torch.Tensor | None = None,
-                 maximum_Range: torch.Tensor | None = None,
-                 halfField_Of_View: torch.Tensor | None = None,
-                 camera_Pos_B: torch.Tensor | None = None,
-                 nHat_B: torch.Tensor | None = None,
+                 minimum_elevation: torch.Tensor | None = None,
+                 maximum_range: torch.Tensor | None = None,
+                 half_field_of_view: torch.Tensor | None = None,
+                 camera_pos_in_body: torch.Tensor | None = None,
+                 camera_direction_in_body: torch.Tensor | None = None,
                  **kwargs):
-        '''This module checks that a vector of mapping points are visible to a spacecraft's imager,
+        """This module checks that a vector of mapping points are visible to a spacecraft's imager,
             outputting a vector of accessMessages for each mapping point.
 
         Args:
@@ -54,57 +54,76 @@ class GroundMapping(Module[GroundMappingStateDict]):
             camera_Pos_B (torch.Tensor, optional): [m] Position of the camera in the body frame. Defaults to None, which initializes to zero.
             nHat_B (torch.Tensor, optional): [-] Instrument unit direction vector in body frame components
 
-        '''
+        """
         super().__init__(*args, **kwargs)
 
-        minimum_Elevation = torch.tensor(
+        minimum_elevation = torch.tensor(
             [0.0 * torch.pi / 180], dtype=torch.float32
-        ) if minimum_Elevation is None else minimum_Elevation
+        ) if minimum_elevation is None else minimum_elevation
 
-        maximum_Range = torch.tensor(
+        maximum_range = torch.tensor(
             [-1],
-            dtype=torch.float32) if maximum_Range is None else maximum_Range
+            dtype=torch.float32) if maximum_range is None else maximum_range
 
-        halfField_Of_View = torch.tensor(
+        half_field_of_view = torch.tensor(
             [10.0 * torch.pi / 180], dtype=torch.float32
-        ) if halfField_Of_View is None else halfField_Of_View
+        ) if half_field_of_view is None else half_field_of_view
 
         #
-        camera_Pos_B = torch.zeros(
-            3, dtype=torch.float32) if camera_Pos_B is None else camera_Pos_B
+        camera_pos_in_body = torch.zeros(
+            3, dtype=torch.float32
+        ) if camera_pos_in_body is None else camera_pos_in_body
 
         #
-        nHat_B = torch.zeros(3,
-                             dtype=torch.float32) if nHat_B is None else nHat_B
+        camera_direction_in_body = torch.zeros(
+            3, dtype=torch.float32
+        ) if camera_direction_in_body is None else camera_direction_in_body
 
         self.register_buffer(
-            "minimum_Elevation",
-            minimum_Elevation,
+            '_minimum_elevation',
+            minimum_elevation,
             persistent=False,
         )
         self.register_buffer(
-            "maximum_Range",
-            maximum_Range,
+            '_maximum_range',
+            maximum_range,
             persistent=False,
         )
         self.register_buffer(
-            "halfField_Of_View",
-            halfField_Of_View,
+            '_half_field_of_view',
+            half_field_of_view,
             persistent=False,
         )
         self.register_buffer(
-            "camera_Pos_B",
-            camera_Pos_B,
+            '_camera_pos_in_body',
+            camera_pos_in_body,
             persistent=False,
         )
         self.register_buffer(
-            "nHat_B",
-            nHat_B,
+            '_camera_direction_in_body',
+            camera_direction_in_body,
             persistent=False,
         )
 
-    def reset(self) -> GroundMappingStateDict | None:
-        pass
+    @property
+    def minimum_elevation(self) -> torch.Tensor:
+        return self.get_buffer('_minimum_elevation')
+
+    @property
+    def maximum_range(self) -> torch.Tensor:
+        return self.get_buffer('_maximum_range')
+
+    @property
+    def half_field_of_view(self) -> torch.Tensor:
+        return self.get_buffer('_half_field_of_view')
+
+    @property
+    def camera_pos_in_body(self) -> torch.Tensor:
+        return self.get_buffer('_camera_pos_in_body')
+
+    @property
+    def camera_direction_in_body(self) -> torch.Tensor:
+        return self.get_buffer('_camera_direction_in_body')
 
     def forward(
         self,
@@ -124,7 +143,7 @@ class GroundMapping(Module[GroundMappingStateDict]):
             list[AccessDict],
             list[GroundStateDict],
     ]:
-        '''This is the main method that gets called every time the module is updated.
+        """This is the main method that gets called every time the module is updated.
             Args:
                 state_dict (GroundMappingStateDict | None): The state dictionary of the module.
                 dcm_J2000_to_PlanetFix: torch.Tensor | None: Orientation matrix of planet-fixed relative to inertial
@@ -134,13 +153,7 @@ class GroundMapping(Module[GroundMappingStateDict]):
                 sigma_BN: torch.Tensor | None = None: The attitude of the spacecraft in the inertial frame.
                 mapping_Points: list[torch.Tensor] | None = None: The mapping points in the inertial frame.
 
-        '''
-        #get the buffers
-        minimum_Elevation = self.get_buffer("minimum_Elevation")
-        maximum_Range = self.get_buffer("maximum_Range")
-        halfField_Of_View = self.get_buffer("halfField_Of_View")
-        camera_Pos_B = self.get_buffer("camera_Pos_B")
-        nHat_B = self.get_buffer("nHat_B")
+        """
 
         #Initialize lists to store access information and current ground states.They are all output parameters
         accessDict: list[AccessDict] = []
@@ -233,10 +246,11 @@ class GroundMapping(Module[GroundMappingStateDict]):
                              xy_norm**3) / (1 + (r_BL_L[..., 2] / xy_norm)**2)
 
             within_view = _check_instrument_fieldofvision(
-                r_LP_N, r_BP_N, dcm_NB, camera_Pos_B, nHat_B, maximum_Range,
-                halfField_Of_View)
+                r_LP_N, r_BP_N, dcm_NB, self.camera_pos_in_body,
+                self.camera_direction_in_body, self.maximum_range,
+                self.half_field_of_view)
 
-            if (viewAngle > minimum_Elevation and within_view):
+            if (viewAngle > self.minimum_elevation and within_view):
                 has_Access = True
             else:
                 has_Access = False

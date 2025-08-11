@@ -1,4 +1,4 @@
-__all__ = ['Module', 'VoidStateDict']
+__all__ = ['Module', 'VoidStateDict', 'ModuleList']
 
 from abc import ABC, abstractmethod
 from typing import Any, Generic, Mapping, TypeVar, TypedDict, cast
@@ -31,6 +31,19 @@ class Module(nn.Module, ABC, Generic[T]):
             child = cast(Module, child)
             state_dict[name] = child.reset()
         return cast(T, state_dict)
+
+
+# NOTE: Module should be placed before nn.ModuleList, because nn.ModuleList
+#  doesn't support extending __init__
+class ModuleList(Module[T], nn.ModuleList):
+
+    def forward(
+        self,
+        state_dict: T,
+        *args,
+        **kwargs,
+    ) -> tuple[T, tuple[Any, ...]]:
+        raise NotImplementedError("ModuleList should never been called")
 
 
 class VoidStateDict(TypedDict):

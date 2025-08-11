@@ -1,3 +1,5 @@
+__all__ = ['compute_shadow_factor']
+
 import torch
 
 from satsim.architecture import constants

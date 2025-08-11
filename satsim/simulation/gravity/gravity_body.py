@@ -9,7 +9,7 @@ from torch import Tensor
 from satsim.architecture import Module, VoidStateDict, constants
 
 
-class GravityBody(Module[VoidStateDict], ABC):
+class GravityBody(ABC):
 
     def __init__(
         self,
@@ -43,11 +43,9 @@ class GravityBody(Module[VoidStateDict], ABC):
         self._is_central = True
 
     @abstractmethod
-    def forward(
+    def compute_gravitational_acceleration(
         self,
-        relative_position: Tensor,  # [b, num_position, 3]
-        *args,
-        **kwargs,
+        relative_position: Tensor,
     ) -> tuple[VoidStateDict, tuple[Tensor]]:
         """
         Computes the gravitational field for a set of point masses at specified positions.
@@ -83,22 +81,20 @@ class GravityBody(Module[VoidStateDict], ABC):
 
 class PointMassGravityBody(GravityBody):
 
-    def forward(
+    def compute_gravitational_acceleration(
         self,
-        relative_position: Tensor,  # [b, num_position, 3]
-        state_dict: VoidStateDict | None = None,
-        *args,
-        **kwargs,
+        relative_position: Tensor,
     ) -> tuple[VoidStateDict, tuple[Tensor]]:
         """
         Computes the gravitational field for a set of point masses at specified positions.
 
         Args:
-            relative_position (Tensor): Position tensor with shape [batch_size, num_positions, num_planets, 3],
-                representing the 3D position vectors of points relative to each planet.
+            relative_position (Tensor): Position tensor with shape [
+            num_positions, 3],
+            representing the 3D position vectors of points relative to each planet.
 
         Returns:
-            Tensor: Gravitational field tensor with shape [batch_size, num_positions, 3],
+            Tensor: Gravitational field tensor with shape [num_positions, 3],
                 representing the total gravitational field at each position due to all planets.
 
         Notes:
@@ -113,4 +109,4 @@ class PointMassGravityBody(GravityBody):
         grav_field = force_magnitude * relative_position
         if grav_field.dim() > 1:
             grav_field = grav_field.sum(-2)
-        return dict(), (grav_field, )
+        return grav_field

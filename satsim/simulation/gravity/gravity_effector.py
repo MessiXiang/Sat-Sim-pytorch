@@ -1,7 +1,7 @@
 __all__ = [
     'GravityField',
 ]
-from typing import TYPE_CHECKING, Iterable
+from typing import Iterable
 
 import torch
 from torch import Tensor
@@ -10,8 +10,7 @@ from satsim.architecture import Module, VoidStateDict
 from satsim.utils import move_to
 
 from .gravity_body import GravityBody
-from .spice_interface import (SpiceInterface, string_normalizer,
-                              zero_ephemeris)
+from .spice_interface import SpiceInterface, string_normalizer, zero_ephemeris
 
 
 class GravityField(Module[VoidStateDict]):
@@ -24,11 +23,7 @@ class GravityField(Module[VoidStateDict]):
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
-
-        if spice_interface is not None:
-            self.add_module('_spice_interface', spice_interface)
-        else:
-            self._spice_interface = None
+        self._spice_interface = spice_interface
 
         if isinstance(gravity_bodies, GravityBody):
             gravity_bodies = [gravity_bodies]
@@ -61,10 +56,7 @@ class GravityField(Module[VoidStateDict]):
 
     @property
     def spice_interface(self) -> SpiceInterface | None:
-        try:
-            return self.get_submodule('_spice_interface')
-        except AttributeError:
-            return None
+        return self._spice_interface
 
     @property
     def central_gravity_body(self) -> GravityBody | None:
@@ -135,17 +127,19 @@ class GravityField(Module[VoidStateDict]):
                     self._gravity_bodies_position_in_inertial[...,idx,:] \
                     - self._gravity_bodies_position_in_inertial[...,self._central_gravity_body_idx,:]
 
-                _, (acceleration_central_body, ) = gravity_body(
-                    relative_position=relative_position_gravity_body)
+                _, (acceleration_central_body,
+                    ) = gravity_body.compute_gravitational_acceleration(
+                        relative_position=relative_position_gravity_body)
 
                 accelerations_central_body.append(acceleration_central_body)
 
             position_spacecraft_wrt_gravity_body_in_inertial = \
                 position_spacecraft_wrt_planet_in_inerital[
                 ..., idx, :]
-            _, (acceleration_spacecraft, ) = gravity_body(
-                relative_position=
-                position_spacecraft_wrt_gravity_body_in_inertial)
+            _, (acceleration_spacecraft,
+                ) = gravity_body.compute_gravitational_acceleration(
+                    relative_position=
+                    position_spacecraft_wrt_gravity_body_in_inertial)
             accelerations_spacecraft.append(acceleration_spacecraft)
 
         if len(accelerations_central_body) > 0:

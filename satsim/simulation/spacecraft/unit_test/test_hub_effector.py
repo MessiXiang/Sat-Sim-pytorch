@@ -20,28 +20,29 @@ def hub_effector():
         timer=timer,
         mass=mass,
         moment_of_inertia_matrix_wrt_body_point=moi,
-        pos=pos,
+        position=pos,
         velocity=velocity,
-        sigma=sigma,
-        omega=omega,
+        attitude=sigma,
+        angular_velocity=omega,
     )
 
 
 def test_hub_effector_init(hub_effector: HubEffector):
     assert torch.allclose(
-        hub_effector.get_buffer('mass'),
+        hub_effector.mass,
         torch.tensor([100.0]),
     )
     assert torch.allclose(
-        hub_effector.get_buffer('moment_of_inertia_matrix_wrt_body_point'),
+        hub_effector.moment_of_inertia_matrix_wrt_body_point,
         torch.eye(3) * 1000.0,
     )
-    assert torch.allclose(hub_effector.pos_init, torch.tensor([1.0, 2.0, 3.0]))
-    assert torch.allclose(hub_effector.velocity_init,
+    assert torch.allclose(hub_effector._position_init,
+                          torch.tensor([1.0, 2.0, 3.0]))
+    assert torch.allclose(hub_effector._velocity_init,
                           torch.tensor([0.1, 0.2, 0.3]))
-    assert torch.allclose(hub_effector.sigma_init,
+    assert torch.allclose(hub_effector._attitude_init,
                           torch.tensor([0.1, 0.2, 0.3]))
-    assert torch.allclose(hub_effector.omega_init,
+    assert torch.allclose(hub_effector._angular_velocity_init,
                           torch.tensor([0.01, 0.02, 0.03]))
 
 
@@ -52,15 +53,16 @@ def test_hub_effector_reset(hub_effector: HubEffector):
     assert 'mass_props' in state_dict
     dynamic_params = state_dict['dynamic_params']
 
-    assert torch.allclose(dynamic_params['pos'], hub_effector.pos_init)
+    assert torch.allclose(dynamic_params['pos'], hub_effector._position_init)
     assert torch.allclose(dynamic_params['velocity'],
-                          hub_effector.velocity_init)
-    assert torch.allclose(dynamic_params['sigma'], hub_effector.sigma_init)
-    assert torch.allclose(dynamic_params['omega'], hub_effector.omega_init)
+                          hub_effector._velocity_init)
+    assert torch.allclose(dynamic_params['sigma'], hub_effector._attitude_init)
+    assert torch.allclose(dynamic_params['omega'],
+                          hub_effector._angular_velocity_init)
     assert torch.allclose(dynamic_params['grav_velocity'],
-                          hub_effector.velocity_init)
+                          hub_effector._velocity_init)
     assert torch.allclose(dynamic_params['grav_velocity_bc'],
-                          hub_effector.velocity_init)
+                          hub_effector._velocity_init)
 
     assert torch.allclose(state_dict['mass_props']['mass'],
                           torch.tensor([100.0]))
@@ -87,7 +89,7 @@ def test_compute_derivatives(hub_effector: HubEffector):
         rDDot_BN_N=None,
         omegaDot_BN_B=None,
         sigma_BN=None,
-        g_N=g_N,
+        gravity_acceleration=g_N,
         back_substitution_matrices=back_sub_matrices)
 
     assert torch.allclose(derivatives['pos'],
@@ -108,8 +110,7 @@ def test_update_energy_momentum_contributions(hub_effector: HubEffector):
     rotEnergyContr = torch.tensor(0.0)
     omega_BN_B = torch.tensor([0.01, 0.02, 0.03])
 
-    moment_of_inertia_matrix_wrt_body_point = hub_effector.get_buffer(
-        'moment_of_inertia_matrix_wrt_body_point')
+    hub_effector.moment_of_inertia_matrix_wrt_body_point = hub_effector.moment_of_inertia_matrix_wrt_body_point
 
     ang_mom, energy = hub_effector.update_energy_momentum_contributions(
         state_dict=state_dict,
@@ -119,13 +120,13 @@ def test_update_energy_momentum_contributions(hub_effector: HubEffector):
         omega_BN_B=omega_BN_B)
 
     expected_ang_mom = torch.matmul(
-        moment_of_inertia_matrix_wrt_body_point,
+        hub_effector.moment_of_inertia_matrix_wrt_body_point,
         omega_BN_B,
     )
     expected_energy = 0.5 * torch.dot(
         omega_BN_B,
         torch.matmul(
-            moment_of_inertia_matrix_wrt_body_point,
+            hub_effector.moment_of_inertia_matrix_wrt_body_point,
             omega_BN_B.unsqueeze(-1),
         ).squeeze(-1),
     )

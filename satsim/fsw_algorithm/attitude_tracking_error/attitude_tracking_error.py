@@ -21,13 +21,14 @@ class AttTrackingError(Module[AttTrackingErrorStateDict]):
             dtype=torch.float32) if sigma_R0R is None else sigma_R0R
 
         self.register_buffer(
-            "sigma_R0R",
+            '_sigma_R0R',
             sigma_R0R,
             persistent=False,
         )
 
-    def reset(self) -> AttTrackingErrorStateDict | None:
-        pass
+    @property
+    def sigma_R0R(self) -> torch.Tensor:
+        return self.get_buffer('_sigma_R0R')
 
     def forward(
         self,
@@ -46,7 +47,7 @@ class AttTrackingError(Module[AttTrackingErrorStateDict]):
             torch.Tensor,
     ]]:
 
-        sigma_RR0 = -self.get_buffer("sigma_R0R")
+        sigma_RR0 = -self.sigma_R0R
         sigma_RN = add_mrp(sigma_R0N, sigma_RR0)
 
         sigma_BR = sub_mrp(sigma_BN, sigma_RN)
