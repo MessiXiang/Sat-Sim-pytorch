@@ -56,7 +56,7 @@ def Bmat(mrp: torch.Tensor) -> torch.Tensor:
     ms2 = 1.0 - torch.sum(mrp**2, dim=-1)
     term1 = ms2 * torch.eye(3, device=ms2.device)
     term2 = 2 * create_skew_symmetric_matrix(mrp)
-    term3 = 2 * torch.matmul(mrp.unsqueeze(-1), mrp.unsqueeze(-2))
+    term3 = 2 * torch.einsum('... i, ... j -> ... i j', mrp, mrp)
 
     return term1 + term2 + term3
 

@@ -4,7 +4,11 @@ import torch
 
 from satsim.architecture import Module, constants, VoidStateDict
 from satsim.simulation.base.battery_base import BatteryStateDict
-from satsim.simulation.spacecraft import Spacecraft, SpacecraftStateDict
+from satsim.simulation.spacecraft import (
+    Spacecraft,
+    SpacecraftStateDict,
+    SpacecraftStateOutput,
+)
 from satsim.simulation.gravity import (
     PointMassGravityBody,
     GravityField,
@@ -19,8 +23,7 @@ from satsim.simulation.reaction_wheels import (
 from satsim.simulation.power import NoBattery, SimpleSolarPanel
 from satsim.simulation.eclipse import compute_shadow_factor
 from satsim.simulation.simple_navigation import (
-    SimpleNavigator,
-)
+    SimpleNavigator, )
 from satsim.enviroment.ground_location import (
     GroundLocation,
     GroundLocationStateDict,
@@ -29,10 +32,9 @@ from satsim.enviroment.ground_mapping import (
     GroundMapping,
     GroundMappingStateDict,
 )
-from satsim.fsw_algorithm.location_pointing import (
-    LocationPointing,
-    LocationPointingStateDict,
-)
+from satsim.fsw_algorithm.location_pointing import (LocationPointing,
+                                                    LocationPointingStateDict,
+                                                    LocationPointingOutput)
 from satsim.fsw_algorithm.mrp_feedback import (
     MRPFeedback,
     MRPFeedbackStateDict,
@@ -79,16 +81,17 @@ class RemoteSensingConstellation(Module):
         )
 
         self.setup_solar_panel()
-        self._battery = NoBattery()
+        self._battery = NoBattery(timer=self._timer)
 
         self._navigator = SimpleNavigator(timer=self._timer)
 
         self._pointing_location = GroundLocation(
-            planet_radius=constants.REQ_EARTH,
+            timer=self._timer,
             minimum_elevation=0.,
         )
         self._pointing_guide = LocationPointing(
-            p_hat_B=torch.tensor([0, 0, 1]).expand(50, 3))
+            timer=self._timer,
+            pointing_direction=torch.tensor([0, 0, 1]).expand(50, 3))
         self._ground_mapping = GroundMapping(
             minimum_elevation=torch.zeros(50),
             maximum_range=torch.full([50], 1e9),
@@ -166,28 +169,24 @@ class RemoteSensingConstellation(Module):
         **kwargs,
     ) -> tuple[RemoteSensingConstellationStateDict, tuple]:
         spacecraft_state_dict = state_dict['_spacecraft']
-        spacecraft_state_dict: SpacecraftStateDict,() = self._spacecraft(
+
+        spacecraft_state_dict: SpacecraftStateDict
+        spacecraft_state_output: SpacecraftStateOutput
+        spacecraft_state_dict, spacecraft_state_output = self._spacecraft(
             spacecraft_state_dict)
         state_dict['_spacecraft'] = spacecraft_state_dict
 
-        spacecraft_positions = spacecraft_state_dict['_hub']['dynamic_params'][
-            'position']
-        spacecraft_attitude = spacecraft_state_dict['_hub']['dynamic_params'][
-            'attitude']
-        spacecraft_velocity = spacecraft_state_dict['_hub']['dynamic_params'][
-            'velocity']
-        spacecraft_angular_velocity = spacecraft_state_dict['_hub'][
-            'dynamic_params']['angular_velocity']
-
-        ephemeris: Ephemeris
-        _, (ephemeris, ) = self.spice_interface(names=['SUN', 'EARTH'])
-        sun_position = ephemeris['position_in_inertial'][:1]
-        earth_position = ephemeris['position_in_inertial'][1:]
+        sun_ephemeris: Ephemeris
+        earth_ephemeris: Ephemeris
+        _, (sun_ephemeris, ) = self.spice_interface(names=['SUN'])
+        _, (earth_ephemeris, ) = self.spice_interface(names=['EARTH'])
+        sun_position = sun_ephemeris['position_in_inertial']
+        earth_position = earth_ephemeris['position_in_inertial']
 
         shadow_factor = compute_shadow_factor(
             r_HN_N=sun_position,
             r_PN_N=earth_position,
-            r_BN_N=spacecraft_positions,
+            r_BN_N=spacecraft_state_output.position_in_inertial,
             planet_radii=torch.tensor([constants.REQ_EARTH]),
         )
 
@@ -197,26 +196,46 @@ class RemoteSensingConstellation(Module):
         battery_state_dict: BatteryStateDict
         solar_panel_state_dict, (_, battery_state_dict) = self._solar_panel(
             solar_panel_state_dict,
-            spacecraft_position_inertial=spacecraft_positions,
+            spacecraft_position_inertial=spacecraft_state_output.
+            position_in_inertial,
             sun_position_inertial=sun_position,
-            spacecraft_attitude_mrp=spacecraft_attitude,
+            spacecraft_attitude_mrp=spacecraft_state_output.attitude,
             shadow_factor=shadow_factor,
             battery_state_dict=battery_state_dict,
         )
 
         navigator_state_dict = state_dict['_navigator']
-        navigator_state_dict, (
-            sun_direction_in_body,
-        ) = self._navigator(
+        navigator_state_dict, (sun_direction_in_body, ) = self._navigator(
             navigator_state_dict,
-            position_in_inertial=spacecraft_positions,
-            mrp_attitude_in_inertial=spacecraft_attitude,
+            position_in_inertial=spacecraft_state_output.position_in_inertial,
+            mrp_attitude_in_inertial=spacecraft_state_output.attitude,
             sun_position_in_inertial=sun_position,
         )
 
         pointing_location_state_dict = state_dict['_pointing_location']
-        self._pointing_location(state_dict=pointing_location_state_dict,
-        spacecraft_states: SpaceCraftStateDict,
-        planet_state: PlanetStateDict,
-        position_LP_P: Tensor,
-        direction_cosine_matrix_Planet2Location: Tensor,)
+        pointing_location_state_dict, (
+            access_state, target_position_LP_N,
+            target_position_LN_N) = self._pointing_location(
+                state_dict=pointing_location_state_dict,
+                position_BN_N=spacecraft_state_output.position_in_inertial,
+                velocity_BN_N=spacecraft_state_output.velocity_in_inertial,
+                ephemeris=earth_ephemeris,
+            )
+        state_dict['_pointing_location'] = pointing_location_state_dict
+
+        pointing_guide_state_dict = state_dict['_pointing_guide']
+        pointing_guide_output: LocationPointingOutput
+        pointing_guide_state_dict, pointing_guide_output = self._pointing_guide(
+            state_dict=pointing_guide_state_dict,
+            target_position_in_inertial=target_position_LN_N,
+            spacecraft_position_in_inertial=spacecraft_state_output.
+            position_in_inertial,
+            spacecraft_attitude=spacecraft_state_output.attitude,
+            spacecraft_angular_velocity_in_body=spacecraft_state_output.
+            angular_velocity,
+            **kwargs,
+        )
+        state_dict['_pointing_guide'] = pointing_guide_state_dict
+
+        ground_mapping_state_dict = state_dict['_ground_mapping']
+        self._ground_mapping()

@@ -6,7 +6,7 @@ from typing import Self
 import torch
 from torch import Tensor
 
-from satsim.architecture import Module, VoidStateDict, constants
+from satsim.architecture import VoidStateDict, constants
 
 
 class GravityBody(ABC):
