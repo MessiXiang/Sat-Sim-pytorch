@@ -20,7 +20,7 @@ class LocationPointingStateDict(TypedDict):
 
 class LocationPointingOutput(NamedTuple):
     attitude_reference_in_body: torch.Tensor
-    angular_velocity_body_wrt_reference_in_body: torch.Tensor
+    angular_velocity_reference_wrt_body_in_body: torch.Tensor
     attitude_inertial_in_reference: torch.Tensor
     angular_velocity_reference_wrt_inertial_in_inertial: torch.Tensor
 
@@ -106,6 +106,7 @@ class LocationPointing(Module[LocationPointingStateDict]):
             - Handles special cases for parallel and near-180-degree pointing directions.
             - Uses Modified Rodrigues Parameters (MRP) for attitude representation.
         """
+        # R or reference frame is defined by sigma_BR. It means if new_sigma_BN = sigma_RB + sigma_BN, pointing vector point at the target
 
         # calculate r_LS_N
         target_position_wrt_body_in_inertial = target_position_in_inertial - spacecraft_position_in_inertial  # [b, ..., 3]
@@ -129,7 +130,7 @@ class LocationPointing(Module[LocationPointingStateDict]):
         # calculate sigma_BR
         attitude_reference_in_body = torch.zeros_like(
             spacecraft_attitude)  # [b, ..., 3]
-        non_parallel_mask = constants.PARALLEL_TOLERANCE > angle_error
+        non_parallel_mask = angle_error > constants.PARALLEL_TOLERANCE
 
         if torch.any(non_parallel_mask):
             near_180_mask = (torch.pi -
@@ -153,7 +154,7 @@ class LocationPointing(Module[LocationPointingStateDict]):
             -attitude_reference_in_body,
         )
 
-        angular_velocity_body_wrt_reference_in_body = torch.zeros_like(
+        angular_velocity_reference_wrt_body_in_body = torch.zeros_like(
             spacecraft_angular_velocity_in_body)
         if 'attitude_reference_in_body_old' in state_dict:
             attitude_reference_in_body_old = state_dict[
@@ -162,13 +163,13 @@ class LocationPointing(Module[LocationPointingStateDict]):
             sigma_dot_BR = difference / self._timer.dt
             binv = _binv_mrp(attitude_reference_in_body)
             sigma_dot_BR = 4 * sigma_dot_BR
-            angular_velocity_body_wrt_reference_in_body = torch.matmul(
+            angular_velocity_reference_wrt_body_in_body = torch.matmul(
                 binv, sigma_dot_BR.unsqueeze(-1)).squeeze(-1)
 
         angular_velocity_reference_wrt_inertial_in_inertial = torch.matmul(
             dcm_BN.transpose(-2, -1),
             (spacecraft_angular_velocity_in_body -
-             angular_velocity_body_wrt_reference_in_body).unsqueeze(-1),
+             angular_velocity_reference_wrt_body_in_body).unsqueeze(-1),
         ).squeeze(-1)
 
         return (
@@ -176,8 +177,8 @@ class LocationPointing(Module[LocationPointingStateDict]):
                 attitude_reference_in_body_old=attitude_reference_in_body),
             LocationPointingOutput(
                 attitude_reference_in_body=attitude_reference_in_body,
-                angular_velocity_body_wrt_reference_in_body=
-                angular_velocity_body_wrt_reference_in_body,
+                angular_velocity_reference_wrt_body_in_body=
+                angular_velocity_reference_wrt_body_in_body,
                 attitude_inertial_in_reference=attitude_inertial_in_reference,
                 angular_velocity_reference_wrt_inertial_in_inertial=
                 angular_velocity_reference_wrt_inertial_in_inertial,

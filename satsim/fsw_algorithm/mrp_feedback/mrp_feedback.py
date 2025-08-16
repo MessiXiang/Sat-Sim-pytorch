@@ -25,10 +25,11 @@ class MRPFeedback(Module[MRPFeedbackStateDict]):
     ):
         super().__init__(*args, **kwargs)
         control_law_type = torch.zeros(
-            1) if control_law_type is None else control_law_type
+            1,
+            dtype=torch.bool) if control_law_type is None else control_law_type
 
         known_torque_point_b_in_body = torch.zeros(
-            1
+            3
         ) if known_torque_point_b_in_body is None else known_torque_point_b_in_body
 
         self.register_buffer('_k', k, persistent=False)
@@ -105,21 +106,25 @@ class MRPFeedback(Module[MRPFeedbackStateDict]):
         z = torch.zeros_like(omega_BN_B)
 
         integral_mask = self.ki > 0
-        integral_sigma = torch.where(integral_mask,
-                                     integral_sigma + self.k * dt * sigma_BR,
-                                     integral_sigma)
-        clamp_mask = integral_mask & (torch.abs(integral_sigma)
-                                      > self.integral_limit)
+        integral_sigma = torch.where(
+            integral_mask.unsqueeze(-1),
+            integral_sigma + self.k.unsqueeze(-1) * dt * sigma_BR,
+            integral_sigma.expand_as(sigma_BR),
+        )
+
+        integral_limit = self.integral_limit.unsqueeze(-1)
+        clamp_mask = integral_mask.unsqueeze(-1) & (torch.abs(integral_sigma)
+                                                    > integral_limit)
         integral_sigma = torch.where(
             clamp_mask,
-            torch.copysign(self.integral_limit, integral_sigma),
+            torch.copysign(integral_limit, integral_sigma),
             integral_sigma,
         )
 
         state_dict['integral_sigma'] = integral_sigma
 
         z = torch.where(
-            integral_mask,
+            integral_mask.unsqueeze(-1),
             integral_sigma + torch.matmul(
                 inertia_spacecraft_point_b_in_body,
                 omega_BR_B.unsqueeze(-1),
@@ -127,8 +132,10 @@ class MRPFeedback(Module[MRPFeedbackStateDict]):
             z,
         )
 
-        integral_feedback_output = z * self.ki * self.p  # v3_5
-        attitude_control_torque = sigma_BR * self.k + omega_BR_B * self.p + integral_feedback_output
+        integral_feedback_output = z * self.ki.unsqueeze(
+            -1) * self.p.unsqueeze(-1)  # v3_5
+        attitude_control_torque = sigma_BR * self.k.unsqueeze(
+            -1) + omega_BR_B * self.p.unsqueeze(-1) + integral_feedback_output
 
         temp1 = torch.matmul(
             inertia_spacecraft_point_b_in_body,
@@ -143,17 +150,16 @@ class MRPFeedback(Module[MRPFeedbackStateDict]):
         temp2 = torch.where(
             self.control_law_type,
             omega_BN_B,
-            omega_RN_B + z * self.ki,
+            omega_RN_B + z * self.ki.unsqueeze(-1),
         )
         attitude_control_torque = attitude_control_torque + torch.cross(
             temp1,
             temp2,
             dim=-1,
         )
-
         attitude_control_torque = attitude_control_torque + torch.matmul(
             inertia_spacecraft_point_b_in_body,
-            omega_BN_B.cross(omega_RN_B, dim=-1) - domega_RN_B,
-        ) + self.known_torque_point_b_in_body
+            (omega_BN_B.cross(omega_RN_B, dim=-1) - domega_RN_B).unsqueeze(-1),
+        ).squeeze(-1) + self.known_torque_point_b_in_body
 
         return state_dict, (-attitude_control_torque, integral_feedback_output)

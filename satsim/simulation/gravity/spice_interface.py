@@ -9,6 +9,8 @@ from torch import Tensor
 
 from satsim.architecture import Module, VoidStateDict
 
+from . import __path__
+
 
 def string_normalizer(s: str):
     return s.strip().upper().replace(' ', '_')
@@ -98,10 +100,6 @@ class SpiceInterface(Module[VoidStateDict]):
                 gravity_body_state[:3], )
             gravity_body_velocity_in_inertial = torch.tensor(
                 gravity_body_state[3:], )
-            gravity_body_positions_in_inertial.append(
-                gravity_body_position_in_inertial)
-            gravity_body_velocities_in_inertial.append(
-                gravity_body_velocity_in_inertial)
 
             gravity_body_J20002planet_fix_state = spiceypy.sxform(
                 self._reference_base,

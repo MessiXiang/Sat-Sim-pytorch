@@ -15,7 +15,7 @@ from satsim.architecture import Module
 class BackSubMatrices(TypedDict):
     # Because we have simplified satellite as a mass point rather than a rigid body
     # its equation of motion become more simple
-    moment_of_inertia_matrtix: torch.Tensor
+    moment_of_inertia_matrix: torch.Tensor
     ext_force: torch.Tensor
     ext_torque: torch.Tensor
 

@@ -1,4 +1,4 @@
-__all__ = ['ReactionWheelMotorTorqueStateDict', 'ReactionWheelMotorTorque']
+__all__ = ['ReactionWheelMotorTorque']
 import torch
 
 from satsim.architecture import Module, VoidStateDict
@@ -12,6 +12,7 @@ class ReactionWheelMotorTorque(Module[VoidStateDict]):
         control_axis: torch.Tensor,
         **kwargs,
     ):
+        super().__init__(*args, **kwargs)
         self.register_buffer(
             '_control_axis',
             control_axis,
@@ -25,6 +26,7 @@ class ReactionWheelMotorTorque(Module[VoidStateDict]):
 
     def forward(
         self,
+        state_dict: VoidStateDict,
         *args,
         torque_request_body: torch.Tensor,  # [3]
         reaction_wheel_spin_axis_in_body: torch.Tensor,
@@ -52,4 +54,4 @@ class ReactionWheelMotorTorque(Module[VoidStateDict]):
 
         motor_torque = torch.matmul(temp, CGs).squeeze(-2)
 
-        return dict(), (motor_torque, )
+        return state_dict, (motor_torque, )
