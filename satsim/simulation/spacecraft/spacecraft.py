@@ -5,7 +5,8 @@ __all__ = [
     'DynamicParamsDict',
 ]
 from copy import deepcopy
-from typing import NamedTuple, TypedDict
+from time import sleep
+from typing import NamedTuple, NotRequired, TypedDict
 
 import torch
 
@@ -37,7 +38,7 @@ class SpacecraftStateDict(TypedDict):
 
     ## childmodules
     _hub: HubEffectorStateDict
-    _reaction_wheels: ReactionWheelsStateDict
+    _reaction_wheels: NotRequired[ReactionWheelsStateDict]
 
 
 DynamicParamsDict = dict[str, dict[str, torch.Tensor]]
@@ -81,7 +82,7 @@ class Spacecraft(
         return self._gravity_field
 
     @property
-    def reaction_wheels(self) -> ReactionWheels:
+    def reaction_wheels(self) -> ReactionWheels | None:
         return self._reaction_wheels
 
     def reset(self) -> SpacecraftStateDict:
@@ -173,8 +174,8 @@ class Spacecraft(
             )
 
         # update back substitution matrices for hub
-        back_substitution_contribution['moment_of_inertia_matrtix'] = (
-            back_substitution_contribution['moment_of_inertia_matrtix'] +
+        back_substitution_contribution['moment_of_inertia_matrix'] = (
+            back_substitution_contribution['moment_of_inertia_matrix'] +
             moment_of_inertia_matrix_wrt_body_point)
         back_substitution_contribution['ext_torque'] = (
             back_substitution_contribution['ext_torque'] + torch.cross(
@@ -209,6 +210,7 @@ class Spacecraft(
             reaction_wheels_state_dict = state_dict['_reaction_wheels']
             reaction_wheels_state_dot = self._reaction_wheels.compute_derivatives(
                 state_dict=reaction_wheels_state_dict,
+                integrate_time_step=integrate_time_step,
                 angular_velocity_dot=hub_state_dot['angular_velocity'],
             )
             states_dot['_reaction_wheels'] = reaction_wheels_state_dot
