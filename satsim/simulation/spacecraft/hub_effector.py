@@ -122,7 +122,7 @@ class HubEffector(
         ext_torque = back_substitution_matrices['ext_torque']
         ext_force = back_substitution_matrices['ext_force']
         moment_of_inertia_matrix = back_substitution_matrices[
-            'moment_of_inertia_matrtix']
+            'moment_of_inertia_matrix']
 
         attitude_dot = 0.25 * torch.matmul(
             Bmat(attitude),
@@ -137,8 +137,8 @@ class HubEffector(
         )
         velocity_dot = torch.matmul(
             dcm_NB,
-            ext_force.unsqueeze(-1) / spacecraft_mass,
-        ) + gravity_acceleration
+            (ext_force / spacecraft_mass.unsqueeze(-1)).unsqueeze(-1),
+        ).squeeze(-1) + gravity_acceleration
         grav_velocity_dot = gravity_acceleration
         position_dot = velocity.clone()
 
@@ -146,7 +146,7 @@ class HubEffector(
             position=position_dot,
             velocity=velocity_dot.squeeze(-1),
             attitude=attitude_dot,
-            omega=angular_velocity_dot.squeeze(-1),
+            angular_velocity=angular_velocity_dot.squeeze(-1),
             grav_velocity=grav_velocity_dot,
         )
 
@@ -156,11 +156,14 @@ class HubEffector(
         integrate_time_step: float,
     ) -> HubEffectorStateDict:
         sigma = state_dict['dynamic_params']['attitude']
-        sigma_norm = sigma.norm()
-        if sigma_norm > 1:
-            sigma = -sigma / sigma_norm
-            state_dict['dynamic_params']['attitude'] = sigma
-            # mrp_switch_count += 1
+        sigma_norm = sigma.norm(dim=-1, keepdim=True)
+        normalize_mask = sigma_norm > 1
+        sigma = torch.where(
+            normalize_mask,
+            -sigma / sigma_norm,
+            sigma,
+        )
+        state_dict['dynamic_params']['attitude'] = sigma
 
         return state_dict
 

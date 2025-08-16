@@ -1,4 +1,5 @@
 __all__ = ['OrbitDict', 'OrbitalElements', 'elem2rv']
+import warnings
 import torch
 import dataclasses
 from typing import Any, TypedDict, cast
@@ -107,8 +108,11 @@ def elem2rv(
     :return:   vVec, velocity vector
     """
 
-    if 1.0 + elements.eccentricity * torch.cos(elements.true_anomaly) < eps:
-        print('WARNING: Radius is near infinite in elem2rv conversion.')
+    if torch.any(
+            1.0 +
+            elements.eccentricity * torch.cos(elements.true_anomaly) < eps):
+        warnings.warn(
+            'WARNING: Radius is near infinite in elem2rv conversion.')
 
     # Calculate the semilatus rectum and the radius #
     p = elements.semi_major_axis * (
@@ -125,8 +129,8 @@ def elem2rv(
               torch.cos(elements.right_ascension_of_the_ascending_node))
     r3 = r * (torch.sin(theta) * torch.sin(elements.inclination))
 
-    if torch.abs(p) < eps:
-        if torch.abs(1.0 - elements.eccentricity) < eps:
+    if torch.any(torch.abs(p) < eps):
+        if torch.any(torch.abs(1.0 - elements.eccentricity) < eps):
             # Rectilinear orbit #
             raise ValueError('elem2rv does not support rectilinear orbits')
         # Parabola #
