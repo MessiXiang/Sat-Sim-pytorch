@@ -23,8 +23,8 @@ class BatteryBase(Module[BatteryStateDict]):
     ):
         super().__init__(*args, **kwargs)
         if stored_charge_percentage_init is not None and torch.any(
-                stored_charge_percentage_init < 0.
-                | stored_charge_percentage_init > 1.):
+            (stored_charge_percentage_init < 0.)
+                | (stored_charge_percentage_init > 1.)):
             raise ValueError("Initialized stored chage percentage not valid.")
 
         self.stored_charge_init = torch.zeros_like(
@@ -42,9 +42,10 @@ class BatteryBase(Module[BatteryStateDict]):
 
     def reset(self) -> BatteryStateDict:
         return BatteryStateDict(
-            stored_charge=self.stored_charge_init.clone(),
+            stored_charge_percentage=self.stored_charge_init.clone(),
             storage_capacity=self.storage_capacity,
-            current_net_power=torch.zeros_like(self.stored_charge_init),
+            current_net_power_percentage=torch.zeros_like(
+                self.stored_charge_init),
         )
 
 

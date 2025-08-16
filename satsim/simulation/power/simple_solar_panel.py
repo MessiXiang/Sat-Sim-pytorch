@@ -35,11 +35,11 @@ class SimpleSolarPanel(Module[VoidStateDict], PowerNodeMixin):
         """
         super().__init__(*args, **kwargs)
 
-        if panel_area <= 0:
+        if torch.any(panel_area <= 0):
             raise ValueError("panel_area must be positive")
-        if not (0 < panel_efficiency <= 1):
+        if not torch.all((0 < panel_efficiency) & (panel_efficiency <= 1)):
             raise ValueError("panel_efficiency must be in (0,1]")
-        if torch.norm(panel_direction_in_body) < 1e-5:
+        if torch.any(torch.norm(panel_direction_in_body) < 1e-5):
             raise ValueError(
                 "panel_direction_in_body_frame must be normalized")
 

@@ -107,7 +107,7 @@ class ReactionWheels(
 
     @property
     def spin_axis_in_body(self) -> Tensor:
-        return torch.eye(3, 3).to(self.mass)
+        return torch.eye(3, 3).expand(self.mass.size(0), 3, 3).to(self.mass)
 
     @property
     def moment_of_inertia_wrt_spin(self) -> Tensor:
@@ -160,8 +160,8 @@ class ReactionWheels(
         current_torque = state_dict['current_torque']
 
         back_substitution_contribution[
-            'moment_of_inertia_matrtix'] = back_substitution_contribution[
-                'moment_of_inertia_matrtix'] - (
+            'moment_of_inertia_matrix'] = back_substitution_contribution[
+                'moment_of_inertia_matrix'] - (
                     self.moment_of_inertia_wrt_spin * torch.einsum(
                         '... a n, ... b n -> ... a b',
                         self.spin_axis_in_body,
@@ -232,22 +232,13 @@ class ReactionWheels(
         current_torque = state_dict['current_torque']
         wheel_power = angular_velocity * current_torque  # shape (batch_size, 1,num_reaction_wheels)
 
-        base_power_need = self.get_buffer(
-            '_base_power_need')  # shape (batch_size, 1, num_reaction_wheels, )
-        elec_to_mech_eff = self.get_buffer(
-            '_elec_to_mech_eff'
-        )  # shape (batch_size, 1, num_reaction_wheels, )
-        mech_to_elec_eff = self.get_buffer(
-            '_mech_to_elec_eff'
-        )  # shape (batch_size, 1, num_reaction_wheels, )
-
-        is_accel_mode = (mech_to_elec_eff < 0) | (
+        is_accel_mode = (self.mech_to_elec_efficiency < 0) | (
             wheel_power > 0)  # shape (batch_size, 1, num_reaction_wheels)
 
-        accel_power = base_power_need + torch.abs(
+        accel_power = self.base_power + torch.abs(
             wheel_power
-        ) / elec_to_mech_eff  # shape (batch_size, 1, num_reaction_wheels)
-        regen_power = base_power_need + mech_to_elec_eff * wheel_power  # shape (batch_size, 1, num_reaction_wheels)
+        ) / self.elec_to_mech_efficiency  # shape (batch_size, 1, num_reaction_wheels)
+        regen_power = self.base_power + self.mech_to_elec_efficiency * wheel_power  # shape (batch_size, 1, num_reaction_wheels)
 
         total_power = torch.where(
             is_accel_mode,
@@ -272,7 +263,7 @@ class ReactionWheels(
         self,
         state_dict: ReactionWheelsStateDict,
         *args,
-        power_storage_state_dict: BatteryStateDict,
+        battery_state_dict: BatteryStateDict,
         motor_torque: Tensor,
         **kwargs,
     ) -> tuple[
@@ -351,7 +342,7 @@ class ReactionWheels(
         )
         state_dict['current_torque'] = motor_torque
 
-        power_storage_state_dict, state_dict = self.compute_power_usage(
-            battery_state_dict=power_storage_state_dict, state_dict=state_dict)
+        battery_state_dict, state_dict = self.compute_power_usage(
+            battery_state_dict=battery_state_dict, state_dict=state_dict)
 
-        return state_dict, tuple(power_storage_state_dict)
+        return state_dict, (battery_state_dict, )

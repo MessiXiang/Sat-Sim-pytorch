@@ -34,7 +34,7 @@ class SimpleBattery(BatteryBase):
         state_dict['current_net_power_percentage'] = torch.zeros_like(
             current_net_power_percentage)
 
-        return state_dict
+        return state_dict, tuple()
 
 
 class NoBattery(SimpleBattery):
@@ -42,7 +42,7 @@ class NoBattery(SimpleBattery):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(
             *args,
-            storage_capacity=torch.inf,
+            storage_capacity=torch.tensor(torch.inf),
             stored_charge_percentage_init=torch.tensor(0.5),
             **kwargs,
         )
