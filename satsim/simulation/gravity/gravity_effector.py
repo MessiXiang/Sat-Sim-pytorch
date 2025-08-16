@@ -105,13 +105,11 @@ class GravityField(Module[VoidStateDict]):
             position_spacecraft_in_inertial = \
                 position_spacecraft_wrt_central_point_in_inertial
 
-        position_spacecraft_in_inertial = position_spacecraft_in_inertial.unsqueeze(
+        gravity_bodies_position_in_inertial = self._gravity_bodies_position_in_inertial.unsqueeze(
             -2)
         position_spacecraft_wrt_planet_in_inerital = \
-            position_spacecraft_in_inertial - \
-        self._gravity_bodies_position_in_inertial.expand_as(
-            position_spacecraft_in_inertial,
-        )  # [b, num_spacecraft, num_planet, 3]
+            (position_spacecraft_in_inertial - \
+        gravity_bodies_position_in_inertial).transpose(-2,-3)  # [b, num_spacecraft, num_planet, 3]
 
         # Subtract acceleration of central body due to other bodies to
         # get relative acceleration of spacecraft. See Vallado on
@@ -127,19 +125,17 @@ class GravityField(Module[VoidStateDict]):
                     self._gravity_bodies_position_in_inertial[...,idx,:] \
                     - self._gravity_bodies_position_in_inertial[...,self._central_gravity_body_idx,:]
 
-                _, (acceleration_central_body,
-                    ) = gravity_body.compute_gravitational_acceleration(
-                        relative_position=relative_position_gravity_body)
+                acceleration_central_body = gravity_body.compute_gravitational_acceleration(
+                    relative_position=relative_position_gravity_body)
 
                 accelerations_central_body.append(acceleration_central_body)
 
             position_spacecraft_wrt_gravity_body_in_inertial = \
                 position_spacecraft_wrt_planet_in_inerital[
                 ..., idx, :]
-            _, (acceleration_spacecraft,
-                ) = gravity_body.compute_gravitational_acceleration(
-                    relative_position=
-                    position_spacecraft_wrt_gravity_body_in_inertial)
+            acceleration_spacecraft = gravity_body.compute_gravitational_acceleration(
+                relative_position=
+                position_spacecraft_wrt_gravity_body_in_inertial)
             accelerations_spacecraft.append(acceleration_spacecraft)
 
         if len(accelerations_central_body) > 0:

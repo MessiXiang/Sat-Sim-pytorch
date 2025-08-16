@@ -1,8 +1,6 @@
 __all__ = [
     'GroundMapping',
     'GroundMappingStateDict',
-    'GroundStateDict',
-    'AccessDict',
 ]
 
 from typing import TypedDict
@@ -240,8 +238,8 @@ class GroundMapping(Module[GroundMappingStateDict]):
             dim=-1)  # [n_p, n_sc]
 
         mask = (camera_normal_proj_distance >= 0) &\
-                (camera_normal_proj_distance <= self.maximum_range
-                | self.maximum_range < 0) # [n_p, n_sc]
+                ((camera_normal_proj_distance <= self.maximum_range)
+                | (self.maximum_range < 0)) # [n_p, n_sc]
 
         view_cone_radius = camera_normal_proj_distance * torch.tan(
             self.half_field_of_view)  # [n_p, n_sc]

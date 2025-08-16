@@ -1,15 +1,15 @@
 __all__ = ['GravityBody', 'PointMassGravityBody']
 
 from abc import ABC, abstractmethod
-from typing import Self
+from typing import Never, Self
 
 import torch
 from torch import Tensor
 
-from satsim.architecture import VoidStateDict, constants
+from satsim.architecture import Module, VoidStateDict, constants
 
 
-class GravityBody(ABC):
+class GravityBody(Module[VoidStateDict], ABC):
 
     def __init__(
         self,
@@ -42,11 +42,18 @@ class GravityBody(ABC):
     def set_central(self):
         self._is_central = True
 
+    def forward(
+        state_dict: VoidStateDict,
+        *args,
+        **kwargs,
+    ) -> Never:
+        raise NotImplementedError
+
     @abstractmethod
     def compute_gravitational_acceleration(
         self,
         relative_position: Tensor,
-    ) -> tuple[VoidStateDict, tuple[Tensor]]:
+    ) -> Tensor:
         """
         Computes the gravitational field for a set of point masses at specified positions.
         
@@ -84,7 +91,7 @@ class PointMassGravityBody(GravityBody):
     def compute_gravitational_acceleration(
         self,
         relative_position: Tensor,
-    ) -> tuple[VoidStateDict, tuple[Tensor]]:
+    ) -> Tensor:
         """
         Computes the gravitational field for a set of point masses at specified positions.
 
