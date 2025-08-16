@@ -4,6 +4,8 @@ __all__ = [
     'to_rotation_matrix',
     'add_mrp',
     'sub_mrp',
+    'dcm_to_mrp',
+    'dcm_to_eulerparameters',
 ]
 import torch
 
@@ -54,7 +56,8 @@ def Bmat(mrp: torch.Tensor) -> torch.Tensor:
     """
     # Compute intermediate values
     ms2 = 1.0 - torch.sum(mrp**2, dim=-1)
-    term1 = ms2 * torch.eye(3, device=ms2.device)
+    # TODO: change to einops and add to checklist
+    term1 = ms2.unsqueeze(-1).unsqueeze(-1) * torch.eye(3, device=ms2.device)
     term2 = 2 * create_skew_symmetric_matrix(mrp)
     term3 = 2 * torch.einsum('... i, ... j -> ... i j', mrp, mrp)
 
@@ -169,3 +172,97 @@ def sub_mrp(q1: torch.Tensor, q2: torch.Tensor) -> torch.Tensor:
     result = torch.where(norm2 > 1.0, -result / norm2, result)
 
     return result
+
+
+def dcm_to_mrp(dcm: torch.Tensor) -> torch.Tensor:
+    """
+    Convert a direction cosine matrix to a MRP vector. 
+    Input:
+        dcm: shape (..., 3, 3)
+    Output:
+        mrp: shape (..., 3)
+
+    Note:
+    with torch.float32, this method has a accurate around 1e-6
+    """
+
+    b = dcm_to_eulerparameters(dcm)  # (..., 4)
+
+    mrp_0 = b[..., 1] / (1 + b[..., 0])
+    mrp_1 = b[..., 2] / (1 + b[..., 0])
+    mrp_2 = b[..., 3] / (1 + b[..., 0])
+    mrp = torch.stack([mrp_0, mrp_1, mrp_2], dim=-1)
+    return mrp
+
+
+def dcm_to_eulerparameters(C: torch.Tensor) -> torch.Tensor:
+    """
+    Convert a direction cosine matrix (DCM) to Euler Parameters (quaternion) with batched support.
+    Ensures the first component is non-negative.
+    Input:
+        C: shape (..., 3, 3)
+    Output:
+        b: shape (..., 4)
+    """
+    tr = torch.einsum('... i i -> ...', C)
+
+    b2_0 = (1 + tr) / 4.
+    b2_1 = (1 + 2 * C[..., 0, 0] - tr) / 4.
+    b2_2 = (1 + 2 * C[..., 1, 1] - tr) / 4.
+    b2_3 = (1 + 2 * C[..., 2, 2] - tr) / 4.
+    b2 = torch.stack([b2_0, b2_1, b2_2, b2_3], dim=-1)
+
+    # Find the index of the maximum component
+    i = torch.argmax(b2, dim=-1, keepdim=True)
+
+    b = torch.zeros_like(b2)
+    # case 0
+    case0_mask = i == 0
+    if torch.any(case0_mask):
+        b_0 = torch.sqrt(b2_0)
+        b_1 = (C[..., 1, 2] - C[..., 2, 1]) / (4 * b_0)
+        b_2 = (C[..., 2, 0] - C[..., 0, 2]) / (4 * b_0)
+        b_3 = (C[..., 0, 1] - C[..., 1, 0]) / (4 * b_0)
+        b_case0 = torch.stack([b_0, b_1, b_2, b_3], dim=-1)
+        b = torch.where(case0_mask, b_case0, b)
+
+    # case 1
+    case1_mask = i == 1
+    if torch.any(case1_mask):
+        b_1 = torch.sqrt(b2_1)
+        b_0 = (C[..., 1, 2] - C[..., 2, 1]) / (4 * b_1)
+        b_2 = (C[..., 0, 1] + C[..., 1, 0]) / (4 * b_1)
+        b_3 = (C[..., 2, 0] + C[..., 0, 2]) / (4 * b_1)
+        b_case1 = torch.stack([b_0, b_1, b_2, b_3], dim=-1)
+        b = torch.where(case1_mask, b_case1, b)
+
+    # case 2
+    case2_mask = i == 2
+    if torch.any(case2_mask):
+        b_2 = torch.sqrt(b2_2)
+        b_0 = (C[..., 2, 0] - C[..., 0, 2]) / (4 * b_2)
+        b_0_negative_mask = b_0 < 0
+        b_0 = torch.where(b_0_negative_mask, -b_0, b_0)
+        b_2 = torch.where(b_0_negative_mask, -b_2, b_2)
+        b_1 = (C[..., 0, 1] + C[..., 1, 0]) / (4 * b_2)
+        b_3 = (C[..., 1, 2] + C[..., 2, 1]) / (4 * b_2)
+        b_case2 = torch.stack([b_0, b_1, b_2, b_3], dim=-1)
+        b = torch.where(case2_mask, b_case2, b)
+
+    # case 3
+    case3_mask = i == 3
+    if torch.any(case3_mask):
+        b_3 = torch.sqrt(b2_3)
+        b_0 = (C[..., 0, 1] - C[..., 1, 0]) / (4 * b_3)
+        b_0_negative_mask = b_0 < 0
+        b_0 = torch.where(b_0_negative_mask, -b_0, b_0)
+        b_3 = torch.where(b_0_negative_mask, -b_3, b_3)
+        b_1 = (C[..., 2, 0] + C[..., 0, 2]) / (4 * b_3)
+        b_2 = (C[..., 1, 2] + C[..., 2, 1]) / (4 * b_3)
+        b_case3 = torch.stack([b_0, b_1, b_2, b_3], dim=-1)
+        b = torch.where(case3_mask, b_case3, b)
+
+    if not torch.all(case0_mask | case1_mask | case2_mask | case3_mask):
+        raise RuntimeError("Invalid case")
+
+    return b
