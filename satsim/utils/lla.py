@@ -104,7 +104,7 @@ def PCPF2LLA(
     # For spherical planet (polar_radius is None or < 0)
     if polar_radius == equatorial_radius:
         altitude = torch.norm(
-            position_in_planet
+            position_in_planet, dim=-1
         ) - equatorial_radius  # Altitude is the height above assumed-spherical planet surface
         longitude = torch.atan2(y, x)
         latitude = torch.atan2(z, torch.sqrt(x * x + y * y))

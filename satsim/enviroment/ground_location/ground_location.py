@@ -1,8 +1,6 @@
 __all__ = [
     'GroundLocation',
     'GroundLocationStateDict',
-    'Ephemeris',
-    'SpaceCraftStateDict',
     'AccessState',
 ]
 
@@ -46,12 +44,16 @@ class GroundLocation(Module[GroundLocationStateDict]):
             maximum_range = torch.full(minimum_elevation.shape,
                                        -1.).to(minimum_elevation)
 
-        self.register_buffer('_minimum_elevation',
-                             torch.tensor(minimum_elevation),
-                             persistent=False)
-        self.register_buffer('_maximum_range',
-                             torch.tensor(maximum_range),
-                             persistent=False)
+        self.register_buffer(
+            '_minimum_elevation',
+            minimum_elevation,
+            persistent=False,
+        )
+        self.register_buffer(
+            '_maximum_range',
+            maximum_range,
+            persistent=False,
+        )
 
     @property
     def minimum_elevation(self) -> Tensor:
@@ -110,7 +112,7 @@ class GroundLocation(Module[GroundLocationStateDict]):
 
         position_BP_N = position_BN_N - position_PN_N
         position_BL_N = position_BP_N - position_LP_N
-        position_BL_norm = torch.norm(position_BL_N, dim=-1)
+        position_BL_norm = torch.norm(position_BL_N, dim=-1, keepdim=True)
 
         relative_heading_N_unit = position_BL_N / position_BL_norm
 
@@ -122,13 +124,14 @@ class GroundLocation(Module[GroundLocationStateDict]):
         )  # [n_sc] - elevation angle is angle between line of sight and horizontal
 
         # Transform to ground station coordinates
+
         direction_cosine_matrix_inertial2location = torch.matmul(
             direction_cosine_matrix_planet2location,
             direction_cosine_matrix_Inertial2Planet)  # [3, 3]
         position_BL_L = torch.matmul(
             direction_cosine_matrix_inertial2location,
-            position_BL_N,
-        )
+            position_BL_N.unsqueeze(-1),
+        ).squeeze(-1)
 
         # Calculate azimuth
         xy = position_BL_L[..., :2]
@@ -138,6 +141,7 @@ class GroundLocation(Module[GroundLocationStateDict]):
         azimuth = torch.atan2(sin_azimuth, cos_azimuth).squeeze(-1)
 
         # Velocity in local frame
+
         omega_PN_cross_position_BP_N = torch.cross(
             omega_planet.unsqueeze(-2),
             position_BP_N,
@@ -146,7 +150,7 @@ class GroundLocation(Module[GroundLocationStateDict]):
         velocity_BL_N = velocity_BN_N - omega_PN_cross_position_BP_N
         velocity_BL_L = torch.matmul(
             velocity_BL_N,
-            direction_cosine_matrix_inertial2location.T,
+            direction_cosine_matrix_inertial2location.transpose(-1, -2),
         )
 
         # Range rate
@@ -267,22 +271,24 @@ class GroundLocation(Module[GroundLocationStateDict]):
         Returns:
             Tuple of (position_LP_P, position_LN_N, omega_Planet [3], position_LP_N_unit [3])
         """
-        direction_cosine_matrix_Inertial2Planet = planet_state[
-            'J2000_2_planet_fixed']
+        dcm_inertial2planet = planet_state['J2000_2_planet_fixed']
         direction_cosine_matrix_inertial2planet_dot = planet_state[
             'J2000_2_planet_fixed_dot']
         position_PN_N = planet_state['position_in_inertial']
 
         # Transform position to inertial frame
-        position_LP_N = torch.matmul(direction_cosine_matrix_Inertial2Planet.T,
-                                     position_LP_P)
+        position_LP_N = torch.matmul(
+            dcm_inertial2planet.transpose(-1, -2),
+            position_LP_P.unsqueeze(-1),
+        ).squeeze(-1)
         position_LP_N_unit = position_LP_N / torch.norm(position_LP_N)
         position_LN_N = position_PN_N + position_LP_N
 
         # Compute angular velocity
         omega_tilde_PN = -torch.matmul(
             direction_cosine_matrix_inertial2planet_dot,
-            direction_cosine_matrix_Inertial2Planet.T)
+            dcm_inertial2planet.transpose(-2, -1),
+        ).squeeze()
         omega_PN = torch.stack(
             [omega_tilde_PN[2, 1], omega_tilde_PN[0, 2], omega_tilde_PN[1, 0]])
 
