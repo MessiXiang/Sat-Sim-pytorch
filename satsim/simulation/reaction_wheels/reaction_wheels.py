@@ -3,6 +3,9 @@ __all__ = [
     'HoneywellHR12Large',
     'HoneywellHR12Medium',
     'HoneywellHR12Small',
+    'HoneywellHR16Large',
+    'HoneywellHR16Medium',
+    'HoneywellHR16Small',
     'expand',
     'concat',
 ]
@@ -128,6 +131,48 @@ class HoneywellHR12Small(ReactionWheel):
             *args,
             mass=6.0,
             max_momentum=12.,
+            max_torque=0.2,
+            max_angular_velocity=6000. * constants.RPM,
+            **kwargs,
+        )
+
+
+class HoneywellHR16Small(ReactionWheel):
+
+    @classmethod
+    def build(cls, *args, **kwargs) -> Self:
+        return super().build(
+            *args,
+            mass=9.0,
+            max_momentum=50.,
+            max_torque=0.2,
+            max_angular_velocity=6000. * constants.RPM,
+            **kwargs,
+        )
+
+
+class HoneywellHR16Medium(ReactionWheel):
+
+    @classmethod
+    def build(cls, *args, **kwargs) -> Self:
+        return super().build(
+            *args,
+            mass=10.4,
+            max_momentum=75.,
+            max_torque=0.2,
+            max_angular_velocity=6000. * constants.RPM,
+            **kwargs,
+        )
+
+
+class HoneywellHR16Large(ReactionWheel):
+
+    @classmethod
+    def build(cls, *args, **kwargs) -> Self:
+        return super().build(
+            *args,
+            mass=12.,
+            max_momentum=100.,
             max_torque=0.2,
             max_angular_velocity=6000. * constants.RPM,
             **kwargs,
