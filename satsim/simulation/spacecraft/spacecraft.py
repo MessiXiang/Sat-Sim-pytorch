@@ -58,7 +58,7 @@ class Spacecraft(
         velocity: torch.Tensor,
         attitude: torch.Tensor | None = None,
         angular_velocity: torch.Tensor | None = None,
-        gravity_field: GravityField,
+        gravity_field: GravityField | None = None,
         reaction_wheels: ReactionWheels | None = None,
         **kwargs,
     ) -> None:
@@ -78,7 +78,7 @@ class Spacecraft(
         self._reaction_wheels = reaction_wheels
 
     @property
-    def gravity_field(self) -> GravityField:
+    def gravity_field(self) -> GravityField | None:
         return self._gravity_field
 
     @property
@@ -153,7 +153,10 @@ class Spacecraft(
         angular_velocity = hub_state_dict['dynamic_params']['angular_velocity']
 
         gravity_acceleration: torch.Tensor
-        _, (gravity_acceleration, ) = self._gravity_field(position, )
+        if self.gravity_field is not None:
+            _, (gravity_acceleration, ) = self.gravity_field(position, )
+        else:
+            gravity_acceleration = torch.zeros_like(position)
 
         # calculate back substitution matrices
         back_substitution_contribution = BackSubMatrices(
@@ -395,10 +398,14 @@ class Spacecraft(
         # prepare output
         position = state_dict['_hub']['dynamic_params']['position']
         velocity = state_dict['_hub']['dynamic_params']['velocity']
-        position_in_inertial, velocity_in_inertial = self._gravity_field.update_inertial_position_and_velocity(
-            position,
-            velocity,
-        )
+        if self.gravity_field is not None:
+            position_in_inertial, velocity_in_inertial = self._gravity_field.update_inertial_position_and_velocity(
+                position,
+                velocity,
+            )
+        else:
+            position_in_inertial = position
+            velocity_in_inertial = velocity
 
         return state_dict, SpacecraftStateOutput(
             position_in_inertial=position_in_inertial,
