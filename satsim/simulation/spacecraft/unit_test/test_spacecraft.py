@@ -3,10 +3,10 @@ import torch
 import tqdm
 
 from satsim.architecture import Timer
-from satsim.simulation.gravity import (Ephemeris, PointMassGravityBody,
-                                       SpiceInterface, GravityField)
+from satsim.simulation.gravity import (Ephemeris, GravityField,
+                                       PointMassGravityBody)
 from satsim.simulation.spacecraft import Spacecraft
-from satsim.utils import recursive_apply
+from satsim.utils import dict_recursive_apply
 
 
 @pytest.mark.parametrize('device', ['cuda:0', 'cpu'])
@@ -40,7 +40,7 @@ def test_translation(device: str):
     spacecraft_state_dict = spacecraft.reset()
 
     _move = lambda x: x.to(device=device, dtype=torch.float64)
-    spacecraft_state_dict = recursive_apply(spacecraft_state_dict, _move)
+    spacecraft_state_dict = dict_recursive_apply(spacecraft_state_dict, _move)
     spacecraft.to(device=device, dtype=torch.float64)
 
     assert torch.allclose(
@@ -129,7 +129,7 @@ def test_translation_and_rotation(device: str):
     spacecraft_state_dict = spacecraft.reset()
 
     _move = lambda x: x.to(device=device, dtype=torch.float64)
-    spacecraft_state_dict = recursive_apply(spacecraft_state_dict, _move)
+    spacecraft_state_dict = dict_recursive_apply(spacecraft_state_dict, _move)
     spacecraft.to(device=device, dtype=torch.float64)
 
     stop_time = 10.
