@@ -7,7 +7,7 @@ from typing import TypedDict
 
 import torch
 
-from satsim.utils import Bmat, to_rotation_matrix
+from satsim.utils import Bmat, mrp_to_rotation_matrix
 
 from ..base.state_effector import BackSubMatrices, MassProps, BaseStateEffector, StateEffectorStateDict
 
@@ -129,7 +129,7 @@ class HubEffector(
             angular_velocity.unsqueeze(-1),
         ).squeeze(-1)
 
-        dcm_NB = to_rotation_matrix(attitude)
+        dcm_NB = mrp_to_rotation_matrix(attitude)
 
         angular_velocity_dot: torch.Tensor = torch.linalg.solve(
             moment_of_inertia_matrix,

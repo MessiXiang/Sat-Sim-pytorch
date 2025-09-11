@@ -11,7 +11,7 @@ from typing import NamedTuple, NotRequired, TypedDict
 import torch
 
 from satsim.architecture import Module, Timer
-from satsim.utils.matrix_support import to_rotation_matrix
+from satsim.utils.matrix_support import mrp_to_rotation_matrix
 
 from ..base import BackSubMatrices, MassProps
 from ..gravity import GravityField
@@ -363,7 +363,8 @@ class Spacecraft(
         )
         velocity = state_dict['_hub']['dynamic_params']['velocity']
         attitude = state_dict['_hub']['dynamic_params']['attitude']
-        direction_cosine_matrix_body_to_inertial = to_rotation_matrix(attitude)
+        direction_cosine_matrix_body_to_inertial = mrp_to_rotation_matrix(
+            attitude)
         gravitational_velocity = state_dict['_hub']['dynamic_params'][
             'grav_velocity']
         state_dict[

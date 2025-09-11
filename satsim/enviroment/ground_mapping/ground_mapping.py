@@ -6,7 +6,7 @@ __all__ = [
 from typing import TypedDict
 import torch
 from satsim.architecture import Module
-from satsim.utils import DCM_PCPF2SEZ, PCPF2LLA, to_rotation_matrix
+from satsim.utils import DCM_PCPF2SEZ, PCPF2LLA, mrp_to_rotation_matrix
 from satsim.simulation.gravity import Ephemeris
 from ..ground_location import AccessState
 

@@ -2,7 +2,7 @@ __all__ = ['SimpleSolarPanel']
 import torch
 
 from satsim.architecture import Module, VoidStateDict, constants
-from satsim.utils import to_rotation_matrix
+from satsim.utils import mrp_to_rotation_matrix
 
 from ..base import PowerNodeMixin, BatteryStateDict
 
@@ -112,7 +112,7 @@ class SimpleSolarPanel(Module[VoidStateDict], PowerNodeMixin):
         sun_direction_inertial = sun_position_wrt_spacecraft_in_inertial / (
             sun_distance + 1e-10)
 
-        dcm_body_wrt_inertial = to_rotation_matrix(spacecraft_attitude_mrp)
+        dcm_body_wrt_inertial = mrp_to_rotation_matrix(spacecraft_attitude_mrp)
 
         sun_direction_in_body = torch.matmul(
             dcm_body_wrt_inertial,

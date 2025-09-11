@@ -8,7 +8,7 @@ from typing import TypedDict
 import torch
 
 from satsim.architecture import Module
-from satsim.utils import to_rotation_matrix
+from satsim.utils import mrp_to_rotation_matrix
 
 
 class SimpleNavigatorStateDict(TypedDict):
@@ -36,7 +36,7 @@ class SimpleNavigator(Module[SimpleNavigatorStateDict]):
         # Calculate sun position in body frame
         sc2SunInrtl = sun_position_in_inertial - position_in_inertial
         sc2SunInrtl = torch.nn.functional.normalize(sc2SunInrtl, dim=-1)
-        dcm_BN = to_rotation_matrix(mrp_attitude_in_inertial)
+        dcm_BN = mrp_to_rotation_matrix(mrp_attitude_in_inertial)
         sun_direction_in_body = torch.matmul(
             dcm_BN, sc2SunInrtl.unsqueeze(-1)).squeeze(-1)
 

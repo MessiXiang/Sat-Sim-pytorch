@@ -1,7 +1,7 @@
 __all__ = [
     'create_skew_symmetric_matrix',
     'Bmat',
-    'to_rotation_matrix',
+    'mrp_to_rotation_matrix',
     'add_mrp',
     'sub_mrp',
     'dcm_to_mrp',
@@ -64,7 +64,7 @@ def Bmat(mrp: torch.Tensor) -> torch.Tensor:
     return term1 + term2 + term3
 
 
-def to_rotation_matrix(mrp: torch.Tensor) -> torch.Tensor:
+def mrp_to_rotation_matrix(mrp: torch.Tensor) -> torch.Tensor:
     """
     Converts a batch of Modified Rodrigues Parameters (MRP) to rotation matrices.
     

@@ -4,7 +4,7 @@ from typing import TypedDict
 
 import torch
 from satsim.architecture import Module
-from satsim.utils import to_rotation_matrix, add_mrp, sub_mrp
+from satsim.utils import mrp_to_rotation_matrix, add_mrp, sub_mrp
 
 
 class AttTrackingErrorStateDict(TypedDict):
@@ -52,7 +52,7 @@ class AttTrackingError(Module[AttTrackingErrorStateDict]):
 
         sigma_BR = sub_mrp(sigma_BN, sigma_RN)
 
-        dcm_BN = to_rotation_matrix(sigma_BN)
+        dcm_BN = mrp_to_rotation_matrix(sigma_BN)
 
         omega_RN_B = torch.matmul(dcm_BN, omega_RN_N.unsqueeze(-1)).squeeze(-1)
         domega_RN_B = torch.matmul(dcm_BN,

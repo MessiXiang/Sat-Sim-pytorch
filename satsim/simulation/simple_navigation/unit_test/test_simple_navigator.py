@@ -8,7 +8,7 @@ from satsim.simulation.simple_navigation.simple_navigator import (
     AttitudeData,
     TranslationData,
     add_mrp,
-    to_rotation_matrix,
+    mrp_to_rotation_matrix,
 )
 
 
@@ -128,7 +128,7 @@ def test_compute_sun_position_in_body():
 
     # 测试旋转后的情况
     attitude = torch.tensor([0.5, 0.0, 0.0])  # 绕Y轴旋转约90度
-    dcm = to_rotation_matrix(attitude)
+    dcm = mrp_to_rotation_matrix(attitude)
     expected = torch.matmul(dcm, sun_position.unsqueeze(-1)).squeeze(-1)
 
     result = nav.compute_sun_position_in_body(position, attitude, sun_position)
@@ -210,7 +210,7 @@ def test_apply_errors():
                           torch.tensor([0.05, 0.0, 0.0]))
 
     # 验证太阳向量旋转
-    dcm_ot = to_rotation_matrix(navigation_errors[12:15])
+    dcm_ot = mrp_to_rotation_matrix(navigation_errors[12:15])
     expected_sun = torch.matmul(dcm_ot,
                                 sun_position_body.unsqueeze(-1)).squeeze(-1)
     assert torch.allclose(attitude_data["sun_position_in_body"],
@@ -253,12 +253,12 @@ def test_MRP2C_function():
     """测试MRP到方向余弦矩阵的转换"""
     # 测试零MRP (对应单位矩阵)
     q = torch.zeros(3)
-    dcm = to_rotation_matrix(q)
+    dcm = mrp_to_rotation_matrix(q)
     assert torch.allclose(dcm, torch.eye(3), atol=1e-6)
 
     # 测试90度旋转
     q = torch.tensor([0.5, 0.0, 0.0])  # 绕Y轴旋转约90度
-    dcm = to_rotation_matrix(q)
+    dcm = mrp_to_rotation_matrix(q)
 
     # 验证旋转矩阵特性
     # 1. 行列式应为1

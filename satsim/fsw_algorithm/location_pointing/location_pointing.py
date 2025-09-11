@@ -10,7 +10,7 @@ import torch
 import torch.nn.functional as F
 
 from satsim.architecture import Module, constants
-from satsim.utils import add_mrp, to_rotation_matrix
+from satsim.utils import add_mrp, mrp_to_rotation_matrix
 
 
 class LocationPointingStateDict(TypedDict):
@@ -112,7 +112,7 @@ class LocationPointing(Module[LocationPointingStateDict]):
         target_position_wrt_body_in_inertial = target_position_in_inertial - spacecraft_position_in_inertial  # [b, ..., 3]
 
         # principle rotation angle to point pHat at location
-        dcm_BN = to_rotation_matrix(spacecraft_attitude)  # [b, ..., 3, 3]
+        dcm_BN = mrp_to_rotation_matrix(spacecraft_attitude)  # [b, ..., 3, 3]
         target_position_in_body = torch.matmul(
             dcm_BN,
             target_position_wrt_body_in_inertial.unsqueeze(-1)).squeeze(-1)

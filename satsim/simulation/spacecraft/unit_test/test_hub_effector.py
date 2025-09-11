@@ -3,7 +3,7 @@ import torch
 
 from satsim.architecture import Timer
 from satsim.simulation.spacecraft import HubEffector, HubEffectorDynamicParams
-from satsim.utils import Bmat, to_rotation_matrix
+from satsim.utils import Bmat, mrp_to_rotation_matrix
 
 
 @pytest.fixture
