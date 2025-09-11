@@ -6,6 +6,7 @@ __all__ = [
 from typing import TypedDict
 
 import torch
+from todd.loggers import master_logger
 
 from satsim.utils import Bmat, mrp_to_rotation_matrix
 
@@ -150,20 +151,25 @@ class HubEffector(
             grav_velocity=grav_velocity_dot,
         )
 
-    def modify_states(
+    def normalize_attitude(
         self,
         state_dict: HubEffectorStateDict,
-        integrate_time_step: float,
     ) -> HubEffectorStateDict:
         sigma = state_dict['dynamic_params']['attitude']
         sigma_norm = sigma.norm(dim=-1, keepdim=True)
         normalize_mask = sigma_norm > 1
-        sigma = torch.where(
-            normalize_mask,
-            -sigma / sigma_norm,
-            sigma,
-        )
-        state_dict['dynamic_params']['attitude'] = sigma
+
+        if torch.any(normalize_mask):
+            master_logger.warning(
+                "The norm of MRP is greater than 1. Normalizing it.")
+
+            sigma = torch.where(
+                normalize_mask,
+                -sigma /
+                torch.einsum('...i,...i->...', sigma, sigma).unsqueeze(-1),
+                sigma,
+            )
+            state_dict['dynamic_params']['attitude'] = sigma
 
         return state_dict
 
