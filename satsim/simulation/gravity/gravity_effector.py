@@ -10,7 +10,7 @@ from satsim.architecture import Module, VoidStateDict
 from satsim.utils import move_to
 
 from .gravity_body import GravityBody
-from .spice_interface import SpiceInterface, string_normalizer, zero_ephemeris
+from .spice_interface import Ephemeris, SpiceInterface, string_normalizer, zero_ephemeris
 
 
 class GravityField(Module[VoidStateDict]):
@@ -73,7 +73,7 @@ class GravityField(Module[VoidStateDict]):
             _, (gravity_bodies_ephemeris, ) = self.spice_interface(
                 names=self.gravity_bodies_names, )
 
-        self._gravity_bodies_ephemeris = move_to(
+        self._gravity_bodies_ephemeris: Ephemeris = move_to(
             gravity_bodies_ephemeris,
             target=target,
         )
@@ -84,7 +84,7 @@ class GravityField(Module[VoidStateDict]):
 
         ephemeris = self._gravity_bodies_ephemeris
         self._gravity_bodies_position_in_inertial = ephemeris[
-            'position_in_inertial'] + ephemeris['velocity_in_inertial'] * dt
+            'position_CN_N'] + ephemeris['velocity_CN_N'] * dt
 
     def forward(
         self,
@@ -177,7 +177,7 @@ class GravityField(Module[VoidStateDict]):
 
         velocity_spacecraft_in_inertial = (
             velocity_spacecraft_wrt_central_body_in_inertial +
-            self._gravity_bodies_ephemeris['velocity_in_inertial'][
+            self._gravity_bodies_ephemeris['velocity_CN_N'][
                 ..., self._central_gravity_body_idx, :])
 
         return (
