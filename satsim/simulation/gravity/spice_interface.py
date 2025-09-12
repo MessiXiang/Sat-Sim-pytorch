@@ -17,19 +17,16 @@ def string_normalizer(s: str):
 
 
 class Ephemeris(TypedDict):
-    """
-    All Tensor should be of shape [batch_size, num_body, *value_shape]. First two dimension can be ommited or set to 1
-    
-    """
-    position_in_inertial: Tensor  # position vector
-    velocity_in_inertial: Tensor  # velocity vector
-    J2000_2_planet_fixed: NotRequired[Tensor]  # DCM from J2000 to planet-fixed
-    J2000_2_planet_fixed_dot: NotRequired[Tensor]  # DCM derivative
+    position_PN_N: Tensor  # position vector in inertial frame
+    velocity_PN_N: Tensor  # velocity vector in inertial frame
+    direction_cosine_matrix_PN: NotRequired[
+        Tensor]  # DCM from J2000 (inertial frame) to planet-fixed
+    direction_cosine_matrix_PN_dot: NotRequired[Tensor]  # DCM derivative
 
 
 zero_ephemeris = lambda: Ephemeris(
-    position_in_inertial=torch.zeros(1, 3),
-    velocity_in_inertial=torch.zeros(1, 3),
+    position_PN_N=torch.zeros(1, 3),
+    velocity_PN_N=torch.zeros(1, 3),
 )
 
 
@@ -84,10 +81,10 @@ class SpiceInterface(Module[VoidStateDict]):
         if isinstance(names, str):
             names = [names]
 
-        gravity_body_positions_in_inertial = []
-        gravity_body_velocities_in_inertial = []
-        gravity_body_J20002planet_fix_matrices = []
-        gravity_body_J20002planet_fix_matrices_dot = []
+        positions_PN_N = []
+        velocities_PN_N = []
+        direction_cosine_matrices_PN = []
+        direction_cosine_matrices_PN_dot = []
         for gravity_body_name in names:
             gravity_body_state, _ = spiceypy.spkezr(
                 gravity_body_name,
@@ -96,10 +93,8 @@ class SpiceInterface(Module[VoidStateDict]):
                 'NONE',
                 self._zero_base,
             )
-            gravity_body_position_in_inertial = torch.tensor(
-                gravity_body_state[:3], )
-            gravity_body_velocity_in_inertial = torch.tensor(
-                gravity_body_state[3:], )
+            position_PN_N = torch.tensor(gravity_body_state[:3], )
+            velocity_PN_N = torch.tensor(gravity_body_state[3:], )
 
             gravity_body_J20002planet_fix_state = spiceypy.sxform(
                 self._reference_base,
@@ -108,27 +103,22 @@ class SpiceInterface(Module[VoidStateDict]):
             )
             gravity_body_J20002planet_fix_state = torch.tensor(
                 gravity_body_J20002planet_fix_state, )
-            gravity_body_J20002planet_fix_matrix = \
+            direction_cosine_matrix_PN = \
                 gravity_body_J20002planet_fix_state[:3, :3]
-            gravity_body_J20002planet_fix_matrix_dot = \
+            direction_cosine_matrix_PN_dot = \
                 gravity_body_J20002planet_fix_state[3:, :3]
 
-            gravity_body_positions_in_inertial.append(
-                gravity_body_position_in_inertial)
-            gravity_body_velocities_in_inertial.append(
-                gravity_body_velocity_in_inertial)
-            gravity_body_J20002planet_fix_matrices.append(
-                gravity_body_J20002planet_fix_matrix)
-            gravity_body_J20002planet_fix_matrices_dot.append(
-                gravity_body_J20002planet_fix_matrix_dot)
+            positions_PN_N.append(position_PN_N)
+            velocities_PN_N.append(velocity_PN_N)
+            direction_cosine_matrices_PN.append(direction_cosine_matrix_PN)
+            direction_cosine_matrices_PN_dot.append(
+                direction_cosine_matrix_PN_dot)
 
         return dict(), (Ephemeris(
-            position_in_inertial=torch.stack(
-                gravity_body_positions_in_inertial, dim=-2),
-            velocity_in_inertial=torch.stack(
-                gravity_body_velocities_in_inertial, dim=-2),
-            J2000_2_planet_fixed=torch.stack(
-                gravity_body_J20002planet_fix_matrices, dim=-3),
-            J2000_2_planet_fixed_dot=torch.stack(
-                gravity_body_J20002planet_fix_matrices_dot, dim=-3),
+            position_PN_N=torch.stack(positions_PN_N, dim=-2),
+            velocity_PN_N=torch.stack(velocities_PN_N, dim=-2),
+            direction_cosine_matrix_PN=torch.stack(
+                direction_cosine_matrices_PN, dim=-3),
+            direction_cosine_matrix_PN_dot=torch.stack(
+                direction_cosine_matrices_PN_dot, dim=-3),
         ), )
