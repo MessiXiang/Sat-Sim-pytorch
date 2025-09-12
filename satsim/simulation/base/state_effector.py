@@ -64,13 +64,6 @@ class BaseStateEffector(Module[T], ABC):
     ) -> BackSubMatrices:
         return back_substitution_contribution
 
-    def modify_states(
-        self,
-        state_dict: T,
-        integrate_time_step: float,
-    ) -> T:
-        return state_dict
-
     def calculate_force_torque_on_body(
         self,
         state_dict: T,

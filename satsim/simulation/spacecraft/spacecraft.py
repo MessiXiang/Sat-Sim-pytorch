@@ -24,7 +24,7 @@ class SpacecraftStateOutput(NamedTuple):
     velocity_in_inertial: torch.Tensor
     attitude: torch.Tensor
     angular_velocity: torch.Tensor
-    angular_velocity_dot: torch.Tensor
+    angular_acceleration: torch.Tensor
     total_accumulated_non_gravitational_velocity_change_in_body: torch.Tensor
     total_accumulated_non_gravitational_velocity_change_in_inertial: torch.Tensor
     non_conservative_acceleration_of_body_in_body: torch.Tensor
@@ -345,11 +345,11 @@ class Spacecraft(
         **kwargs,
     ) -> tuple[SpacecraftStateDict, SpacecraftStateOutput]:
         ## pre-solution
-
         hub_state_dict = state_dict['_hub']
-        hub_state_dict = self._hub.match_gravity_to_velocity_state(
-            hub_state_dict)
-        state_dict['_hub'] = hub_state_dict
+        # for non gravitational acceleration calculation
+        # hub_state_dict = self._hub.match_gravity_to_velocity_state(
+        #     hub_state_dict)
+        # state_dict['_hub'] = hub_state_dict
         angular_velocity_before = hub_state_dict['dynamic_params'][
             'angular_velocity'].clone()
 
@@ -357,10 +357,11 @@ class Spacecraft(
         state_dict = self.integrate_to_this_time(state_dict=state_dict)
 
         ## post-solution
-        state_dict = self.update_spacecraft_mass_props(
-            state_dict,
-            integrate_time_step=0. * self._timer.dt,
-        )
+        # update mass props
+        # state_dict = self.update_spacecraft_mass_props(
+        #     state_dict,
+        #     integrate_time_step=0. * self._timer.dt,
+        # )
         velocity = state_dict['_hub']['dynamic_params']['velocity']
         attitude = state_dict['_hub']['dynamic_params']['attitude']
         direction_cosine_matrix_body_to_inertial = mrp_to_rotation_matrix(
@@ -384,14 +385,12 @@ class Spacecraft(
 
         angular_velocity = state_dict['_hub']['dynamic_params'][
             'angular_velocity']
-        angular_velocity_dot = (angular_velocity -
+        angular_acceleration = (angular_velocity -
                                 angular_velocity_before) / self._timer.dt
 
         hub_state_dict = state_dict['_hub']
-        hub_state_dict = self._hub.modify_states(
-            state_dict=hub_state_dict,
-            integrate_time_step=0. * self._timer.dt,
-        )
+        hub_state_dict = self._hub.normalize_attitude(
+            state_dict=hub_state_dict, )
         state_dict['_hub'] = hub_state_dict
 
         # NOTE: Here originally calculate ext_force_torque on spacecraft.
@@ -411,9 +410,7 @@ class Spacecraft(
         return state_dict, SpacecraftStateOutput(
             position_in_inertial=position_in_inertial,
             velocity_in_inertial=velocity_in_inertial,
-            attitude=attitude,
-            angular_velocity=angular_velocity,
-            angular_velocity_dot=angular_velocity_dot,
+            angular_acceleration=angular_acceleration,
             total_accumulated_non_gravitational_velocity_change_in_body=
             state_dict[
                 'accumulated_non_gravitational_velocity_change_in_body'],
