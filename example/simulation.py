@@ -213,9 +213,9 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
         battery_state_dict: BatteryStateDict
         solar_panel_state_dict, (_, battery_state_dict) = self._solar_panel(
             solar_panel_state_dict,
-            spacecraft_position_inertial=spacecraft_state_output.position_BN_N,
-            sun_position_inertial=position_SN_N,
-            spacecraft_attitude_mrp=spacecraft_state_output.attitude_BN,
+            position_BN_N=spacecraft_state_output.position_BN_N,
+            position_SN_N=position_SN_N,
+            attitude_BN=spacecraft_state_output.attitude_BN,
             shadow_factor=shadow_factor,
             battery_state_dict=battery_state_dict,
         )
