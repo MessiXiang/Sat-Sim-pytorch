@@ -13,31 +13,27 @@ class AttTrackingErrorStateDict(TypedDict):
 
 class AttTrackingError(Module[AttTrackingErrorStateDict]):
 
-    def __init__(self, *args, sigma_R0R: torch.Tensor | None = None, **kwargs):
+    def __init__(self, *args, attitude_R0R: torch.Tensor, **kwargs):
 
         super().__init__(*args, **kwargs)
-        sigma_R0R = torch.tensor(
-            [0.01, 0.05, -0.55],
-            dtype=torch.float32) if sigma_R0R is None else sigma_R0R
-
         self.register_buffer(
-            '_sigma_R0R',
-            sigma_R0R,
+            '_attitude_R0R',
+            attitude_R0R,
             persistent=False,
         )
 
     @property
-    def sigma_R0R(self) -> torch.Tensor:
-        return self.get_buffer('_sigma_R0R')
+    def attitude_R0R(self) -> torch.Tensor:
+        return self.get_buffer('_attitude_R0R')
 
     def forward(
         self,
         state_dict: AttTrackingErrorStateDict | None,
-        sigma_R0N: torch.Tensor,
-        omega_RN_N: torch.Tensor,
-        domega_RN_N: torch.Tensor,
-        sigma_BN: torch.Tensor,
-        omega_BN_B: torch.Tensor,
+        attitude_RN: torch.Tensor,
+        angular_velocity_RN_N: torch.Tensor,
+        angular_acceleration_RN_N: torch.Tensor,
+        attitude_BN: torch.Tensor,
+        angular_velocity_BN_B: torch.Tensor,
         *args,
         **kwargs,
     ) -> tuple[AttTrackingErrorStateDict | None, tuple[
@@ -47,17 +43,29 @@ class AttTrackingError(Module[AttTrackingErrorStateDict]):
             torch.Tensor,
     ]]:
 
-        sigma_RR0 = -self.sigma_R0R
-        sigma_RN = add_mrp(sigma_R0N, sigma_RR0)
+        attitude_RR0 = -self.attitude_R0R
+        attitude_RN = add_mrp(attitude_RN, attitude_RR0)
 
-        sigma_BR = sub_mrp(sigma_BN, sigma_RN)
+        attitude_BR = sub_mrp(attitude_BN, attitude_RN)
 
-        dcm_BN = mrp_to_rotation_matrix(sigma_BN)
+        direction_cosine_matrix_BN = mrp_to_rotation_matrix(attitude_BN)
 
-        omega_RN_B = torch.matmul(dcm_BN, omega_RN_N.unsqueeze(-1)).squeeze(-1)
-        domega_RN_B = torch.matmul(dcm_BN,
-                                   domega_RN_N.unsqueeze(-1)).squeeze(-1)
+        angular_velocity_RN_B = torch.einsum(
+            '...ij,...j->...i',
+            direction_cosine_matrix_BN,
+            angular_velocity_RN_N,
+        )
+        angular_acceleration_RN_B = torch.einsum(
+            '...ij,...j->...i',
+            direction_cosine_matrix_BN,
+            angular_acceleration_RN_N,
+        )
 
-        omega_BR_B = omega_BN_B - omega_RN_B
+        angular_velocity_BR_B = angular_velocity_BN_B - angular_velocity_RN_B
 
-        return state_dict, (sigma_BR, omega_BR_B, omega_RN_B, domega_RN_B)
+        return state_dict, (
+            attitude_BR,
+            angular_velocity_BR_B,
+            angular_velocity_RN_B,
+            angular_acceleration_RN_B,
+        )
