@@ -66,7 +66,7 @@ def Bmat(mrp: torch.Tensor) -> torch.Tensor:
 
 def mrp_to_rotation_matrix(mrp: torch.Tensor) -> torch.Tensor:
     """
-    Converts a batch of Modified Rodrigues Parameters (MRP) to rotation matrices.
+    Converts a batch of Modified Rodrigues Parameters (MRP) attitude_BN to rotation matrices direction_cosine_matrix_BN.
     
     Args:
         mrp: torch.Tensor of shape [batch_size, 3], where each row is an MRP vector (x, y, z).
@@ -75,7 +75,7 @@ def mrp_to_rotation_matrix(mrp: torch.Tensor) -> torch.Tensor:
     Returns:
         torch.Tensor of shape [batch_size, 3, 3], where each [3, 3] slice is a rotation matrix.
     """
-
+    # NOTE: Originaly return dcm_NB, but here we return dcm_BN
     # Compute intermediate values
     ps2 = 1.0 + torch.sum(mrp**2, dim=-1, keepdim=True)  # [batch_size, 1]
     ms2 = 1.0 - torch.sum(mrp**2, dim=-1, keepdim=True)  # [batch_size, 1]
@@ -93,13 +93,13 @@ def mrp_to_rotation_matrix(mrp: torch.Tensor) -> torch.Tensor:
 
     # Construct rotation matrix elements
     r00 = 4.0 * (s1_sq - s2_sq - s3_sq) + ms2_sq.squeeze()  # [batch_size]
-    r01 = s1s2 - 4.0 * z * ms2.squeeze()  # [batch_size]
-    r02 = s1s3 + 4.0 * y * ms2.squeeze()  # [batch_size]
-    r10 = s1s2 + 4.0 * z * ms2.squeeze()  # [batch_size]
+    r10 = s1s2 - 4.0 * z * ms2.squeeze()  # [batch_size]
+    r20 = s1s3 + 4.0 * y * ms2.squeeze()  # [batch_size]
+    r01 = s1s2 + 4.0 * z * ms2.squeeze()  # [batch_size]
     r11 = 4.0 * (-s1_sq + s2_sq - s3_sq) + ms2_sq.squeeze()  # [batch_size]
-    r12 = s2s3 - 4.0 * x * ms2.squeeze()  # [batch_size]
-    r20 = s1s3 - 4.0 * y * ms2.squeeze()  # [batch_size]
-    r21 = s2s3 + 4.0 * x * ms2.squeeze()  # [batch_size]
+    r21 = s2s3 - 4.0 * x * ms2.squeeze()  # [batch_size]
+    r02 = s1s3 - 4.0 * y * ms2.squeeze()  # [batch_size]
+    r12 = s2s3 + 4.0 * x * ms2.squeeze()  # [batch_size]
     r22 = 4.0 * (-s1_sq - s2_sq + s3_sq) + ms2_sq.squeeze()  # [batch_size]
 
     # Stack elements into [batch_size, 3, 3] tensor
@@ -160,7 +160,7 @@ def sub_mrp(q1: torch.Tensor, q2: torch.Tensor) -> torch.Tensor:
         q1 = torch.where(mask, q1_new, q2)
         den = 1 + dot1 * dot2 + 2 * dot12
 
-    cross = torch.cross(q1, q2)
+    cross = torch.cross(q1, q2, dim=-1)
     term1 = (1 - (dot2)) * q1
     term2 = 2 * cross
     term3 = (1 - (dot1)) * q2
