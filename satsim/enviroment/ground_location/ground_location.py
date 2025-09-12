@@ -4,13 +4,16 @@ __all__ = [
     'AccessState',
 ]
 
-from typing import TypedDict, NamedTuple
+from typing import NamedTuple, TypedDict
+
 import torch
+import torch.nn.functional as F
 from torch import Tensor
 from typing_extensions import TypedDict
+
 from satsim.architecture import Module
-from satsim.utils import LLA2PCPF, DCM_PCPF2SEZ, PCPF2LLA
 from satsim.simulation.gravity import Ephemeris
+from satsim.utils import DCM_PCPF2SEZ, LLA2PCPF, PCPF2LLA
 
 
 class AccessState(NamedTuple):
@@ -26,8 +29,8 @@ class AccessState(NamedTuple):
 
 
 class GroundLocationStateDict(TypedDict):
-    location_position_in_planet: torch.Tensor
-    direction_cosine_matrix_planet_to_location: torch.Tensor
+    position_LP_P: torch.Tensor
+    direction_cosine_matrix_LP: torch.Tensor
 
 
 class GroundLocation(Module[GroundLocationStateDict]):
@@ -38,7 +41,7 @@ class GroundLocation(Module[GroundLocationStateDict]):
         minimum_elevation: Tensor,
         maximum_range: Tensor | None = None,
         **kwargs,
-    ):
+    ) -> None:
         super().__init__(*args, **kwargs)
         if maximum_range is None:
             maximum_range = torch.full(minimum_elevation.shape,
@@ -92,10 +95,13 @@ class GroundLocation(Module[GroundLocationStateDict]):
         Returns:
             Updated state dictionary with access information
         """
-        location_position_in_planet = state_dict['location_position_in_planet']
-        direction_cosine_matrix_planet2location = state_dict[
-            'direction_cosine_matrix_planet_to_location']
-        position_LP_N, position_LN_N, omega_planet, position_LP_N_unit = self.update_inertial_positions(
+        # B for body or spacecraft
+        # N for inertial frame
+        # P for planet-fixed frame
+        # L for location frame
+        location_position_in_planet = state_dict['position_LP_P']
+        direction_cosine_matrix_LP = state_dict['direction_cosine_matrix_LP']
+        position_LP_N, position_LN_N, angular_velocity_PN_N, position_LP_N_unit = self.update_inertial_positions(
             location_position_in_planet,
             ephemeris,
         )
@@ -106,32 +112,35 @@ class GroundLocation(Module[GroundLocationStateDict]):
             velocity_BN_N = velocity_BN_N.unsqueeze(0)  # [1, 3]
 
         # Expand ground/planet state
-        position_PN_N = ephemeris['position_in_inertial']
-        direction_cosine_matrix_Inertial2Planet = ephemeris[
-            'J2000_2_planet_fixed']
+        position_PN_N = ephemeris['position_PN_N']
+        direction_cosine_matrix_PN = ephemeris['direction_cosine_matrix_PN']
 
         position_BP_N = position_BN_N - position_PN_N
         position_BL_N = position_BP_N - position_LP_N
-        position_BL_norm = torch.norm(position_BL_N, dim=-1, keepdim=True)
-
-        relative_heading_N_unit = position_BL_N / position_BL_norm
+        position_BL_N_unit = F.normalize(position_BL_N, dim=-1)
 
         # Calculate elevation angle
-        dot_products = (position_LP_N_unit *
-                        relative_heading_N_unit).sum(dim=-1).clamp(-1.0, 1.0)
+        dot_products = torch.einsum(
+            '...i, ...i -> ...',
+            position_LP_N_unit,
+            position_BL_N_unit,
+        ).clamp(-1.0, 1.0)
         view_angle = torch.asin(
             dot_products
         )  # [n_sc] - elevation angle is angle between line of sight and horizontal
 
         # Transform to ground station coordinates
 
-        direction_cosine_matrix_inertial2location = torch.matmul(
-            direction_cosine_matrix_planet2location,
-            direction_cosine_matrix_Inertial2Planet)  # [3, 3]
-        position_BL_L = torch.matmul(
-            direction_cosine_matrix_inertial2location,
-            position_BL_N.unsqueeze(-1),
-        ).squeeze(-1)
+        direction_cosine_matrix_LN = torch.einsum(
+            '...ij, ...jk -> ...ik',
+            direction_cosine_matrix_LP,
+            direction_cosine_matrix_PN,
+        )  # [3, 3]
+        position_BL_L = torch.einsum(
+            '...ij, ...j -> ...i',
+            direction_cosine_matrix_LN,
+            position_BL_N,
+        )
 
         # Calculate azimuth
         xy = position_BL_L[..., :2]
@@ -143,19 +152,21 @@ class GroundLocation(Module[GroundLocationStateDict]):
         # Velocity in local frame
 
         omega_PN_cross_position_BP_N = torch.cross(
-            omega_planet.unsqueeze(-2),
+            angular_velocity_PN_N.unsqueeze(-2),
             position_BP_N,
             dim=-1,
         )
-        velocity_BL_N = velocity_BN_N - omega_PN_cross_position_BP_N
-        velocity_BL_L = torch.matmul(
+        velocity_BL_N = velocity_BN_N - omega_PN_cross_position_BP_N  # [n_sc,3]
+        velocity_BL_L = torch.einsum(
+            '...ij, ...j -> ...i',
+            direction_cosine_matrix_LN,
             velocity_BL_N,
-            direction_cosine_matrix_inertial2location.transpose(-1, -2),
         )
 
         # Range rate
+        position_BL_N_norm = torch.norm(position_BL_N, dim=-1, keepdim=True)
         range_dot = torch.sum(velocity_BL_L * position_BL_L,
-                              dim=-1) / position_BL_norm
+                              dim=-1) / position_BL_N_norm
 
         # Azimuth rate
         azimuth_dot = (-position_BL_L[..., 0] * velocity_BL_L[..., 1] +
@@ -172,12 +183,12 @@ class GroundLocation(Module[GroundLocationStateDict]):
 
         # Determine visibility
         access_mask = (view_angle > self.minimum_elevation) & (
-            (position_BL_norm.squeeze(-1) <= self.maximum_range) |
+            (position_BL_N_norm.squeeze(-1) <= self.maximum_range) |
             (self.maximum_range < 0))
 
         access_state = AccessState(
             has_access=access_mask.to(dtype=torch.uint8),
-            slant_range=position_BL_norm.squeeze(-1),
+            slant_range=position_BL_N_norm.squeeze(-1),
             elevation=view_angle,
             azimuth=azimuth,
             range_dot=range_dot,
@@ -189,7 +200,7 @@ class GroundLocation(Module[GroundLocationStateDict]):
 
         return state_dict, (access_state, position_LP_N, position_LN_N)
 
-    def specify_location(
+    def specify_location_LLA(
         self,
         state_dict: GroundLocationStateDict,
         latitude: Tensor,
@@ -216,12 +227,11 @@ class GroundLocation(Module[GroundLocationStateDict]):
             planet_radius,
             polar_radius,
         )
-        direction_cosine_matrix_planet2inertial = DCM_PCPF2SEZ(
-            latitude, longitude)
+        direction_cosine_matrix_NP = DCM_PCPF2SEZ(latitude, longitude)
 
         state_dict['location_position_in_planet'] = position_LP_P
         state_dict[
-            'direction_cosine_matrix_planet_to_location'] = direction_cosine_matrix_planet2inertial
+            'direction_cosine_matrix_planet_to_location'] = direction_cosine_matrix_NP
 
         return state_dict
 
@@ -246,12 +256,11 @@ class GroundLocation(Module[GroundLocationStateDict]):
             planet_radius,
             polar_radius,
         )
-        direction_cosine_matrix_planet2inertial = DCM_PCPF2SEZ(
-            tmp_llaposition[..., 0], tmp_llaposition[..., 1])
+        direction_cosine_matrix_LP = DCM_PCPF2SEZ(tmp_llaposition[..., 0],
+                                                  tmp_llaposition[..., 1])
 
-        state_dict['location_position_in_planet'] = position_LP_P
-        state_dict[
-            'direction_cosine_matrix_planet_to_location'] = direction_cosine_matrix_planet2inertial
+        state_dict['position_LP_P'] = position_LP_P
+        state_dict['direction_cosine_matrix_LP'] = direction_cosine_matrix_LP
 
         return state_dict
 
