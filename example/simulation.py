@@ -78,9 +78,9 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
             mass=torch.rand(self._n),
             moment_of_inertia_matrix_wrt_body_point=torch.eye(3).expand(
                 self._n, 3, 3),
-            position=r,
-            velocity=v,
-            angular_velocity=torch.zeros(self._n, 3),
+            position_BNp_N=r,
+            velocity_BN_N=v,
+            angular_velocity_BN_B=torch.zeros(self._n, 3),
             gravity_field=self._gravity_field,
             reaction_wheels=reaction_wheels,
         )
@@ -96,13 +96,13 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
         )
         self._pointing_guide = LocationPointing(
             timer=self._timer,
-            pointing_direction=torch.tensor([0., 0., 1.]).expand(self._n, 3))
+            pointing_direction_B_B=torch.tensor([0., 0.,
+                                                 1.]).expand(self._n, 3))
         self._ground_mapping = GroundMapping(
             timer=self._timer,
             minimum_elevation=torch.zeros(self._n),
             maximum_range=torch.full([self._n], 1e9),
-            camera_direction_in_body=torch.tensor([0, 0,
-                                                   1]).expand(self._n, 3),
+            camera_direction_B_B=torch.tensor([0, 0, 1]).expand(self._n, 3),
             half_field_of_view=torch.randn(self._n) / 10 + 0.25,
         )
 
@@ -171,6 +171,8 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
             panel_efficiency=torch.rand(self._n) / 10 + 0.3,
         )
 
+    # def _get_initial_attitude(self, position_BN_N: torch.Tensor) -> torch.Tensor:
+
     def forward(
         self,
         state_dict: RemoteSensingConstellationStateDict,
@@ -184,6 +186,10 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
         spacecraft_state_dict, spacecraft_state_output = self._spacecraft(
             spacecraft_state_dict)
         state_dict['_spacecraft'] = spacecraft_state_dict
+        attitude_BN = spacecraft_state_dict['_hub']['dynamic_params'][
+            'attitude']
+        angular_velocity_BN_B = spacecraft_state_dict['_hub'][
+            'dynamic_params']['angular_velocity']
 
         sun_ephemeris: Ephemeris
         earth_ephemeris: Ephemeris
@@ -191,11 +197,11 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
         _, (earth_ephemeris, ) = self.spice_interface(names=['EARTH'])
         sun_ephemeris = move_to(
             sun_ephemeris,
-            spacecraft_state_output.angular_velocity,
+            angular_velocity_BN_B,
         )
         earth_ephemeris = move_to(
             earth_ephemeris,
-            spacecraft_state_output.angular_velocity,
+            angular_velocity_BN_B,
         )
         position_SN_N = sun_ephemeris['position_CN_N']
         position_PN_N = earth_ephemeris['position_CN_N']
@@ -215,26 +221,26 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
             solar_panel_state_dict,
             position_BN_N=spacecraft_state_output.position_BN_N,
             position_SN_N=position_SN_N,
-            attitude_BN=spacecraft_state_output.attitude_BN,
+            attitude_BN=attitude_BN,
             shadow_factor=shadow_factor,
             battery_state_dict=battery_state_dict,
         )
 
         navigator_state_dict = state_dict['_navigator']
-        navigator_state_dict, (sun_direction_in_body, ) = self._navigator(
+        navigator_state_dict, (_, ) = self._navigator(
             navigator_state_dict,
-            position_in_inertial=spacecraft_state_output.position_in_inertial,
-            mrp_attitude_in_inertial=spacecraft_state_output.attitude,
-            sun_position_in_inertial=sun_position,
+            position_in_inertial=spacecraft_state_output.position_BN_N,
+            mrp_attitude_in_inertial=attitude_BN,
+            sun_position_in_inertial=position_SN_N,
         )
 
         pointing_location_state_dict = state_dict['_pointing_location']
         pointing_location_state_dict, (
-            access_state, target_position_LP_N,
+            access_state, position_LP_N,
             target_position_LN_N) = self._pointing_location(
                 state_dict=pointing_location_state_dict,
-                position_BN_N=spacecraft_state_output.position_in_inertial,
-                velocity_BN_N=spacecraft_state_output.velocity_in_inertial,
+                position_BN_N=spacecraft_state_output.position_BN_N,
+                velocity_BN_N=spacecraft_state_output.velocity_BN_N,
                 ephemeris=earth_ephemeris,
             )
         state_dict['_pointing_location'] = pointing_location_state_dict
@@ -243,12 +249,10 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
         pointing_guide_output: LocationPointingOutput
         pointing_guide_state_dict, pointing_guide_output = self._pointing_guide(
             state_dict=pointing_guide_state_dict,
-            target_position_in_inertial=target_position_LN_N,
-            spacecraft_position_in_inertial=spacecraft_state_output.
-            position_in_inertial,
-            spacecraft_attitude=spacecraft_state_output.attitude,
-            spacecraft_angular_velocity_in_body=spacecraft_state_output.
-            angular_velocity,
+            position_LN_N=target_position_LN_N,
+            position_BN_N=spacecraft_state_output.position_BN_N,
+            attitude_BN=attitude_BN,
+            angular_velocity_BN_B=angular_velocity_BN_B,
             **kwargs,
         )
         state_dict['_pointing_guide'] = pointing_guide_state_dict
@@ -262,15 +266,12 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
             integral_feedback_output,
         ) = self._mrp_control(
             state_dict=mrp_control_state_dict,
-            sigma_BR=pointing_guide_output.attitude_reference_in_body,
-            omega_BR_B=pointing_guide_output.
-            angular_velocity_reference_wrt_body_in_body,
+            sigma_BR=pointing_guide_output.attitude_BR,
+            omega_BR_B=pointing_guide_output.angular_velocity_BR_B,
             omega_RN_B=torch.zeros_like(
-                pointing_guide_output.
-                angular_velocity_reference_wrt_body_in_body),
+                pointing_guide_output.angular_velocity_BR_B),
             domega_RN_B=torch.zeros_like(
-                pointing_guide_output.
-                angular_velocity_reference_wrt_body_in_body),
+                pointing_guide_output.angular_velocity_BR_B),
             wheel_speeds=reaction_wheels_state_dict['dynamic_params']
             ['angular_velocity'],
             inertia_spacecraft_point_b_in_body=self._spacecraft._hub.
@@ -336,7 +337,6 @@ if __name__ == '__main__':
 
     p_bar = tqdm.tqdm(total=180 / timer.dt + 1)
     access_state: AccessState
-    _help = 0.
 
     while timer.time <= 180.:
         simulator_state_dictaccess_state, (access_state, ) = simulator(

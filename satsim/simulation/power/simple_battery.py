@@ -4,7 +4,6 @@ import torch
 from ..base import BatteryBase, BatteryStateDict
 
 
-# Note
 class SimpleBattery(BatteryBase):
 
     def forward(

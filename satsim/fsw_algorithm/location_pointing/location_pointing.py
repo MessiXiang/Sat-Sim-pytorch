@@ -14,15 +14,15 @@ from satsim.utils import add_mrp, mrp_to_rotation_matrix
 
 
 class LocationPointingStateDict(TypedDict):
-    attitude_reference_in_body_old: NotRequired[torch.Tensor]
+    attitude_BR_old: NotRequired[torch.Tensor]
     # [3] / [batch, ..., 3]
 
 
 class LocationPointingOutput(NamedTuple):
-    attitude_reference_in_body: torch.Tensor
-    angular_velocity_reference_wrt_body_in_body: torch.Tensor
-    attitude_inertial_in_reference: torch.Tensor
-    angular_velocity_reference_wrt_inertial_in_inertial: torch.Tensor
+    attitude_BR: torch.Tensor
+    angular_velocity_BR_B: torch.Tensor
+    attitude_BN: torch.Tensor
+    angular_velocity_RN_N: torch.Tensor
 
 
 class LocationPointing(Module[LocationPointingStateDict]):
@@ -30,59 +30,62 @@ class LocationPointing(Module[LocationPointingStateDict]):
     def __init__(
         self,
         *args,
-        pointing_direction: torch.Tensor | None = None,  # [b, ..., 3]
+        pointing_direction_B_B: torch.Tensor | None = None,  # [b, ..., 3]
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
         self.init = True
 
-        p_norm = torch.norm(pointing_direction, dim=-1)
-        if torch.any(p_norm < constants.PARALLEL_TOLERANCE):
+        pointing_direction_B_B_norm = torch.norm(pointing_direction_B_B,
+                                                 dim=-1)
+        if torch.any(
+                pointing_direction_B_B_norm < constants.PARALLEL_TOLERANCE):
             print(
-                f"locationPoint: vector p_hat_B is not setup as a unit vector. Min norm: {p_norm.min().item}"
+                f"locationPoint: vector p_hat_B is not setup as a unit vector. Min norm: {pointing_direction_B_B_norm.min().item()}"
             )
         self.register_buffer(
-            '_pointing_direction',
-            pointing_direction,
+            '_pointing_direction_B_B',
+            pointing_direction_B_B,
             persistent=False,
         )
 
         v1 = torch.tensor([1.0, 0.0, 0.0]).unsqueeze(0)  # [1, 3]
-        e_hat_180_B = torch.cross(pointing_direction, v1,
-                                  dim=-1)  # [b, ..., 3]
+        aux_perp_vector_180_B_B = torch.cross(pointing_direction_B_B,
+                                              v1,
+                                              dim=-1)  # [b, ..., 3]
 
-        e_norm = torch.norm(e_hat_180_B, dim=-1)
+        e_norm = torch.norm(aux_perp_vector_180_B_B, dim=-1)
         mask = e_norm < constants.PARALLEL_TOLERANCE
         if torch.any(mask):
             v1 = torch.tensor([0.0, 1.0, 0.0]).unsqueeze(0)  # [1, 3]
-            e_hat_180_B = torch.where(
+            aux_perp_vector_180_B_B = torch.where(
                 mask.unsqueeze(-1),  # [b, ..., 1]
-                torch.cross(pointing_direction, v1, dim=-1),
-                e_hat_180_B,
+                torch.cross(pointing_direction_B_B, v1, dim=-1),
+                aux_perp_vector_180_B_B,
             )
 
         self.register_buffer(
-            '_aux_perp_vector_near_180',
-            pointing_direction,
+            '_aux_perp_vector_180_B_B',
+            aux_perp_vector_180_B_B,
             persistent=False,
         )
 
     @property
-    def pointing_direction(self) -> torch.Tensor:
-        return self.get_buffer('_pointing_direction')
+    def pointing_direction_B_B(self) -> torch.Tensor:
+        return self.get_buffer('_pointing_direction_B_B')
 
     @property
-    def aux_perp_vector_near_180(self) -> torch.Tensor:
-        return self.get_buffer('_aux_perp_vector_near_180')
+    def aux_perp_vector_180_B_B(self) -> torch.Tensor:
+        return self.get_buffer('_aux_perp_vector_180_B_B')
 
     def forward(
         self,
         state_dict: LocationPointingStateDict,
         *args,
-        target_position_in_inertial: torch.Tensor,
-        spacecraft_position_in_inertial: torch.Tensor,
-        spacecraft_attitude: torch.Tensor,
-        spacecraft_angular_velocity_in_body: torch.Tensor,
+        position_LN_N: torch.Tensor,
+        position_BN_N: torch.Tensor,
+        attitude_BN: torch.Tensor,
+        angular_velocity_BN_B: torch.Tensor,
         **kwargs,
     ) -> tuple[LocationPointingStateDict, LocationPointingOutput]:
         """
@@ -90,14 +93,14 @@ class LocationPointing(Module[LocationPointingStateDict]):
         Args:
             state_dict (LocationPointingStateDict): Dictionary containing the previous state, including "sigma_BR_old".
             *args: Additional positional arguments (unused).
-            target_position_in_inertial (torch.Tensor): Target location position in the inertial frame, shape [..., 3].
-            spacecraft_position_in_inertial (torch.Tensor): Spacecraft position in the inertial frame, shape [..., 3].
-            spacecraft_attitude (torch.Tensor): Spacecraft attitude represented as Modified Rodrigues Parameters (MRP), shape [..., 3].
-            spacecraft_angular_velocity_in_inertial (torch.Tensor): Spacecraft angular velocity in the inertial frame, shape [..., 3].
+            position_LN_N (torch.Tensor): Target location position in the inertial frame, shape [..., 3].
+            position_BN_N (torch.Tensor): Spacecraft position in the inertial frame, shape [..., 3].
+            attitude_BN (torch.Tensor): Spacecraft attitude represented as Modified Rodrigues Parameters (MRP), shape [..., 3].
+            angular_velocity_BN_B (torch.Tensor): Spacecraft angular velocity in the inertial frame, shape [..., 3].
             **kwargs: Additional keyword arguments (unused).
         Returns:
             tuple:
-                - updated_state (dict): Updated state dictionary containing "sigma_BR_old" and "e_hat_180_B".
+                - updated_state (dict): Updated state dictionary containing "sigma_BR_old" and "aux_perp_vector_180_B_B".
                 - (att_guidance_message, att_reference_message) (tuple of dicts):
                     - att_guidance_message (dict): Contains "sigma_BR" (MRP error between body and reference) and "omega_BR_B" (angular velocity error in body frame).
                     - att_reference_message (dict): Contains "sigma_RN" (MRP error between reference and inertial) and "omega_RN_N" (reference angular velocity in inertial frame).
@@ -109,27 +112,22 @@ class LocationPointing(Module[LocationPointingStateDict]):
         # R or reference frame is defined by sigma_BR. It means if new_sigma_BN = sigma_RB + sigma_BN, pointing vector point at the target
 
         # calculate r_LS_N
-        target_position_wrt_body_in_inertial = target_position_in_inertial - spacecraft_position_in_inertial  # [b, ..., 3]
+        position_LB_N = position_LN_N - position_BN_N  # [b, ..., 3]
 
         # principle rotation angle to point pHat at location
-        dcm_BN = mrp_to_rotation_matrix(spacecraft_attitude)  # [b, ..., 3, 3]
-        target_position_in_body = torch.matmul(
-            dcm_BN,
-            target_position_wrt_body_in_inertial.unsqueeze(-1)).squeeze(-1)
-        target_direction_in_body = target_position_in_body / torch.norm(
-            target_position_in_body,
-            dim=-1,
-            keepdim=True,
-        )  # [b, ..., 3]
+        direction_cosine_matrix_BN = mrp_to_rotation_matrix(
+            attitude_BN)  # [b, ..., 3, 3]
+        position_LB_B = torch.einsum("...ij,...j->...i",
+                                     direction_cosine_matrix_BN, position_LB_N)
+        position_LB_B_unit = F.normalize(position_LB_B, dim=-1)
 
-        dum1 = torch.sum(self.pointing_direction * target_direction_in_body,
+        dum1 = torch.sum(self.pointing_direction_B_B * position_LB_B_unit,
                          dim=-1)
         dum1 = torch.clamp(dum1, -1.0, 1.0)
         angle_error = torch.acos(dum1)
 
         # calculate sigma_BR
-        attitude_reference_in_body = torch.zeros_like(
-            spacecraft_attitude)  # [b, ..., 3]
+        attitude_BR = torch.zeros_like(attitude_BN)  # [b, ..., 3]
         non_parallel_mask = angle_error > constants.PARALLEL_TOLERANCE
 
         if torch.any(non_parallel_mask):
@@ -137,51 +135,44 @@ class LocationPointing(Module[LocationPointingStateDict]):
                              angle_error) < constants.PARALLEL_TOLERANCE
             rotation_axis = torch.where(
                 near_180_mask.unsqueeze(-1),  # [b, ..., 1]
-                self.aux_perp_vector_near_180,
-                torch.cross(self.pointing_direction,
-                            target_direction_in_body,
+                self.aux_perp_vector_180_B_B,
+                torch.cross(self.pointing_direction_B_B,
+                            position_LB_B_unit,
                             dim=-1))
             rotation_axis = F.normalize(rotation_axis, dim=-1)
-            attitude_reference_in_body = torch.where(
+            attitude_BR = torch.where(
                 non_parallel_mask.unsqueeze(-1),  # [b, ..., 1]
                 -torch.tan(angle_error.unsqueeze(-1) / 4) * rotation_axis,
-                attitude_reference_in_body,
+                attitude_BR,
             )
 
         # compute sigma_RN
-        attitude_inertial_in_reference = add_mrp(
-            spacecraft_attitude,  # N in B
-            -attitude_reference_in_body,
+        attitude_BN = add_mrp(
+            attitude_BN,  # N in B
+            -attitude_BR,
         )
 
-        angular_velocity_reference_wrt_body_in_body = torch.zeros_like(
-            spacecraft_angular_velocity_in_body)
-        if 'attitude_reference_in_body_old' in state_dict:
-            attitude_reference_in_body_old = state_dict[
-                'attitude_reference_in_body_old']
-            difference = attitude_reference_in_body - attitude_reference_in_body_old
+        angular_velocity_BR_B = torch.zeros_like(angular_velocity_BN_B)
+        if 'attitude_BR_old' in state_dict:
+            attitude_BR_old = state_dict['attitude_BR_old']
+            difference = attitude_BR - attitude_BR_old
             sigma_dot_BR = difference / self._timer.dt
-            binv = _binv_mrp(attitude_reference_in_body)
+            binv = _binv_mrp(attitude_BR)
             sigma_dot_BR = 4 * sigma_dot_BR
-            angular_velocity_reference_wrt_body_in_body = torch.matmul(
-                binv, sigma_dot_BR.unsqueeze(-1)).squeeze(-1)
+            angular_velocity_BR_B = torch.einsum("...ij,...j->...i", binv,
+                                                 sigma_dot_BR)
 
-        angular_velocity_reference_wrt_inertial_in_inertial = torch.matmul(
-            dcm_BN.transpose(-2, -1),
-            (spacecraft_angular_velocity_in_body -
-             angular_velocity_reference_wrt_body_in_body).unsqueeze(-1),
-        ).squeeze(-1)
+        angular_velocity_RN_N = torch.einsum(
+            "...ji,...j->...i", direction_cosine_matrix_BN,
+            angular_velocity_BN_B - angular_velocity_BR_B)
 
         return (
-            LocationPointingStateDict(
-                attitude_reference_in_body_old=attitude_reference_in_body),
+            LocationPointingStateDict(attitude_BR_old=attitude_BR),
             LocationPointingOutput(
-                attitude_reference_in_body=attitude_reference_in_body,
-                angular_velocity_reference_wrt_body_in_body=
-                angular_velocity_reference_wrt_body_in_body,
-                attitude_inertial_in_reference=attitude_inertial_in_reference,
-                angular_velocity_reference_wrt_inertial_in_inertial=
-                angular_velocity_reference_wrt_inertial_in_inertial,
+                attitude_BR=attitude_BR,
+                angular_velocity_BR_B=angular_velocity_BR_B,
+                attitude_BN=attitude_BN,
+                angular_velocity_RN_N=angular_velocity_RN_N,
             ),
         )
 
