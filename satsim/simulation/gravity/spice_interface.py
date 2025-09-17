@@ -30,7 +30,11 @@ zero_ephemeris = lambda: Ephemeris(
 )
 
 
-class SpiceInterface(Module[VoidStateDict]):
+class SpiceInterfaceStateDict(TypedDict):
+    pass
+
+
+class SpiceInterface(Module[SpiceInterfaceStateDict]):
 
     def __init__(
         self,
@@ -73,7 +77,7 @@ class SpiceInterface(Module[VoidStateDict]):
     def forward(
         self,
         names: str | list[str],
-        state_dict: VoidStateDict | None = None,
+        state_dict: SpiceInterfaceStateDict | None = None,
         *args,
         **kwargs,
     ) -> tuple[VoidStateDict, tuple[Ephemeris]]:
@@ -103,10 +107,10 @@ class SpiceInterface(Module[VoidStateDict]):
             )
             gravity_body_J20002planet_fix_state = torch.tensor(
                 gravity_body_J20002planet_fix_state, )
-            direction_cosine_matrix_CN = \
-                gravity_body_J20002planet_fix_state[:3, :3]
-            direction_cosine_matrix_CN_dot = \
-                gravity_body_J20002planet_fix_state[3:, :3]
+            direction_cosine_matrix_CN = (
+                gravity_body_J20002planet_fix_state[:3, :3])
+            direction_cosine_matrix_CN_dot = (
+                gravity_body_J20002planet_fix_state[3:, :3])
 
             positions_CN_N.append(position_CN_N)
             velocities_CN_N.append(velocity_CN_N)
