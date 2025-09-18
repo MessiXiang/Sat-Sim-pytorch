@@ -112,8 +112,8 @@ class GroundLocation(Module[GroundLocationStateDict]):
             velocity_BN_N = velocity_BN_N.unsqueeze(0)  # [1, 3]
 
         # Expand ground/planet state
-        position_PN_N = ephemeris['position_PN_N']
-        direction_cosine_matrix_PN = ephemeris['direction_cosine_matrix_PN']
+        position_PN_N = ephemeris['position_CN_N']
+        direction_cosine_matrix_PN = ephemeris['direction_cosine_matrix_CN']
 
         position_BP_N = position_BN_N - position_PN_N
         position_BL_N = position_BP_N - position_LP_N
@@ -280,25 +280,29 @@ class GroundLocation(Module[GroundLocationStateDict]):
         Returns:
             Tuple of (position_LP_P, position_LN_N, omega_Planet [3], position_LP_N_unit [3])
         """
-        dcm_inertial2planet = planet_state['J2000_2_planet_fixed']
-        direction_cosine_matrix_inertial2planet_dot = planet_state[
-            'J2000_2_planet_fixed_dot']
-        position_PN_N = planet_state['position_in_inertial']
+        direction_cosine_matrix_CN = planet_state['direction_cosine_matrix_CN']
+        direction_cosine_matrix_CN_dot = planet_state[
+            'direction_cosine_matrix_CN_dot']
+        position_PN_N = planet_state['position_CN_N']
 
         # Transform position to inertial frame
         position_LP_N = torch.matmul(
-            dcm_inertial2planet.transpose(-1, -2),
+            direction_cosine_matrix_CN.transpose(-1, -2),
             position_LP_P.unsqueeze(-1),
         ).squeeze(-1)
         position_LP_N_unit = position_LP_N / torch.norm(position_LP_N)
         position_LN_N = position_PN_N + position_LP_N
 
         # Compute angular velocity
-        omega_tilde_PN = -torch.matmul(
-            direction_cosine_matrix_inertial2planet_dot,
-            dcm_inertial2planet.transpose(-2, -1),
-        ).squeeze()
-        omega_PN = torch.stack(
-            [omega_tilde_PN[2, 1], omega_tilde_PN[0, 2], omega_tilde_PN[1, 0]])
+        angular_velocity_tilde_PN_N = -torch.einsum(
+            '...ij, ...kj -> ...ik',
+            direction_cosine_matrix_CN_dot,
+            direction_cosine_matrix_CN,
+        )
+        angular_velocity_PN_N = torch.stack([
+            angular_velocity_tilde_PN_N[2, 1],
+            angular_velocity_tilde_PN_N[0, 2], angular_velocity_tilde_PN_N[1,
+                                                                           0]
+        ])
 
-        return position_LP_N, position_LN_N, omega_PN, position_LP_N_unit
+        return position_LP_N, position_LN_N, angular_velocity_PN_N, position_LP_N_unit
