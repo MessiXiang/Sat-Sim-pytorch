@@ -1,7 +1,7 @@
 __all__ = ['Ephemeris', 'SpiceInterface']
 
 import os.path as osp
-from typing import Iterable, NotRequired, TypedDict
+from typing import Callable, Iterable, TypedDict
 
 import spiceypy
 import torch
@@ -19,14 +19,15 @@ def string_normalizer(s: str):
 class Ephemeris(TypedDict):
     position_CN_N: Tensor  # position vector in inertial frame
     velocity_CN_N: Tensor  # velocity vector in inertial frame
-    direction_cosine_matrix_CN: NotRequired[
-        Tensor]  # DCM from J2000 (inertial frame) to planet-fixed
-    direction_cosine_matrix_CN_dot: NotRequired[Tensor]  # DCM derivative
+    direction_cosine_matrix_CN: Tensor  # DCM from J2000 (inertial frame) to planet-fixed
+    direction_cosine_matrix_CN_dot: Tensor  # DCM derivative
 
 
-zero_ephemeris = lambda: Ephemeris(
+zero_ephemeris: Callable[[], Ephemeris] = lambda: Ephemeris(
     position_CN_N=torch.zeros(1, 3),
     velocity_CN_N=torch.zeros(1, 3),
+    direction_cosine_matrix_CN=torch.eye(3).unsqueeze(0),
+    direction_cosine_matrix_CN_dot=torch.zeros(1, 3, 3),
 )
 
 
@@ -97,8 +98,12 @@ class SpiceInterface(Module[SpiceInterfaceStateDict]):
                 'NONE',
                 self._zero_base,
             )
-            position_CN_N = torch.tensor(gravity_body_state[:3], )
-            velocity_CN_N = torch.tensor(gravity_body_state[3:], )
+            position_CN_N = torch.tensor(
+                gravity_body_state[:3],  # type: ignore
+            )
+            velocity_CN_N = torch.tensor(
+                gravity_body_state[3:],  # type: ignore
+            )
 
             gravity_body_J20002planet_fix_state = spiceypy.sxform(
                 self._reference_base,
@@ -118,7 +123,7 @@ class SpiceInterface(Module[SpiceInterfaceStateDict]):
             direction_cosine_matrices_CN_dot.append(
                 direction_cosine_matrix_CN_dot)
 
-        return dict(), (Ephemeris(
+        return SpiceInterfaceStateDict(), (Ephemeris(
             position_CN_N=torch.stack(positions_CN_N, dim=-2),
             velocity_CN_N=torch.stack(velocities_CN_N, dim=-2),
             direction_cosine_matrix_CN=torch.stack(

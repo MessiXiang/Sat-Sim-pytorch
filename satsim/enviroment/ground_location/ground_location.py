@@ -68,8 +68,8 @@ class GroundLocation(Module[GroundLocationStateDict]):
 
     def reset(self) -> GroundLocationStateDict:
         state_dict = GroundLocationStateDict(
-            location_position_in_planet=torch.zeros(3),
-            direction_cosine_matrix_planet_to_location=torch.eye(3),
+            position_LP_P=torch.zeros(3),
+            direction_cosine_matrix_LP=torch.eye(3),
         )
         return state_dict
 
@@ -227,11 +227,10 @@ class GroundLocation(Module[GroundLocationStateDict]):
             planet_radius,
             polar_radius,
         )
-        direction_cosine_matrix_NP = DCM_PCPF2SEZ(latitude, longitude)
+        direction_cosine_matrix_LP = DCM_PCPF2SEZ(latitude, longitude)
 
-        state_dict['location_position_in_planet'] = position_LP_P
-        state_dict[
-            'direction_cosine_matrix_planet_to_location'] = direction_cosine_matrix_NP
+        state_dict['position_LP_P'] = position_LP_P
+        state_dict['direction_cosine_matrix_LP'] = direction_cosine_matrix_LP
 
         return state_dict
 

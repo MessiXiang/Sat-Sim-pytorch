@@ -4,11 +4,14 @@ __all__ = [
 ]
 
 from typing import TypedDict
+
 import torch
 import torch.nn.functional as F
+
 from satsim.architecture import Module
-from satsim.utils import DCM_PCPF2SEZ, PCPF2LLA, mrp_to_rotation_matrix
 from satsim.simulation.gravity import Ephemeris
+from satsim.utils import DCM_PCPF2SEZ, PCPF2LLA, mrp_to_rotation_matrix
+
 from ..ground_location import AccessState
 
 
@@ -134,10 +137,10 @@ class GroundMapping(Module[GroundMappingStateDict]):
             - Designed for satellite ground mapping simulation scenarios.
         """
 
-        position_PN_N = ephemeris['position_PN_N']
-        direction_cosine_matrix_PN = ephemeris['direction_cosine_matrix_PN']
+        position_PN_N = ephemeris['position_CN_N']
+        direction_cosine_matrix_PN = ephemeris['direction_cosine_matrix_CN']
         direction_cosine_matrix_PN_dot = ephemeris[
-            'direction_cosine_matrix_PN_dot']
+            'direction_cosine_matrix_CN_dot']
 
         position_BP_N = position_BN_N - position_PN_N  # [n_sc, 3]
 
@@ -264,21 +267,24 @@ class GroundMapping(Module[GroundMappingStateDict]):
             direction_cosine_matrix_NB,  # [n_sc, 3, 3]
             self.camera_direction_B_B,  # [n_sc, 3]
         )  # [n_sc, 3]
-        camera_normal_proj_distance = (position_LB_N *
-                                       camera_direction_B_N).sum(
-                                           dim=-1)  # [n_p, n_sc]
+        camera_normal_proj_distance = torch.einsum(
+            '...j,...j->...',
+            position_LB_N,
+            camera_direction_B_N,
+        )  # [n_p, n_sc]
 
-        mask = (camera_normal_proj_distance >= 0) &\
+        mask = ((camera_normal_proj_distance >= 0) &
                 ((camera_normal_proj_distance <= self.maximum_range)
-                | (self.maximum_range < 0)) # [n_p, n_sc]
+                 | (self.maximum_range < 0)))  # [n_p, n_sc]
 
         view_cone_radius = camera_normal_proj_distance * torch.tan(
             self.half_field_of_view)  # [n_p, n_sc]
 
         position_CpB_N = camera_normal_proj_distance.unsqueeze(
             -1) * camera_direction_B_N  # [n_p, n_sc, 3]
-        position_LCp_N = torch.norm(position_LB_N - position_CpB_N, dim=-1)
+        position_LCp_N_norm = torch.norm(position_LB_N - position_CpB_N,
+                                         dim=-1)
 
-        mask = mask & (position_LCp_N < view_cone_radius)  # [n_p, n_sc]
+        mask = mask & (position_LCp_N_norm < view_cone_radius)  # [n_p, n_sc]
 
         return mask
