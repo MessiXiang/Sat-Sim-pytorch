@@ -104,17 +104,11 @@ class MRPFeedback(Module[MRPFeedbackStateDict]):
 
         omega_BN_B = omega_BR_B + omega_RN_B
 
-        # if integrate is on
-        integral_mask = self.ki > 0
-        integral_sigma = torch.where(
-            integral_mask.unsqueeze(-1),
-            integral_sigma + self.k.unsqueeze(-1) * dt * sigma_BR,
-            integral_sigma.expand_as(sigma_BR),
-        )
+        integral_sigma = (self.ki.unsqueeze(-1) *
+                          (integral_sigma + dt * sigma_BR))
 
         integral_limit = self.integral_limit.unsqueeze(-1)
-        clamp_mask = (integral_mask.unsqueeze(-1) &
-                      (torch.abs(integral_sigma) > integral_limit))
+        clamp_mask = (torch.abs(integral_sigma) > integral_limit)
         integral_sigma = torch.where(
             clamp_mask,
             torch.copysign(integral_limit, integral_sigma),
@@ -123,14 +117,10 @@ class MRPFeedback(Module[MRPFeedbackStateDict]):
 
         state_dict['integral_sigma'] = integral_sigma
 
-        z = torch.where(
-            integral_mask.unsqueeze(-1),
-            integral_sigma + torch.einsum(
-                '...ij, ...j -> ...i',
-                inertia_spacecraft_point_b_in_body,
-                omega_BR_B,
-            ),  # [b, 3]
-            0.,
+        z = integral_sigma + torch.einsum(
+            '...ij, ...j -> ...i',
+            inertia_spacecraft_point_b_in_body,
+            omega_BR_B,
         )
 
         integral_feedback_output = (z * self.ki.unsqueeze(-1) *
