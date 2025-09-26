@@ -1,50 +1,67 @@
-import random
-from typing import TypedDict
-import torch
-import tqdm
+import json
 from copy import deepcopy
+from typing import TypedDict, cast
 
-from satsim.architecture import Module, constants, VoidStateDict, Timer
-from satsim.utils import move_to, dict_recursive_apply
-from satsim.simulation.base.battery_base import BatteryStateDict
-from satsim.simulation.spacecraft import (
-    Spacecraft,
-    SpacecraftStateDict,
-    SpacecraftStateOutput,
-)
-from satsim.simulation.gravity import (
-    PointMassGravityBody,
-    GravityField,
-    SpiceInterface,
-    Ephemeris,
-)
-from satsim.simulation.reaction_wheels import (
-    HoneywellHR12Small,
-    ReactionWheels,
-    expand,
-)
-from satsim.simulation.power import NoBattery, SimpleSolarPanel
-from satsim.simulation.eclipse import compute_shadow_factor
-from satsim.simulation.simple_navigation import (
-    SimpleNavigator, )
-from satsim.enviroment.ground_location import (
-    GroundLocation,
-    GroundLocationStateDict,
-    AccessState,
-)
-from satsim.enviroment.ground_mapping import (
-    GroundMapping,
-    GroundMappingStateDict,
-)
+import matplotlib.pyplot as plt
+import torch
+import torch.nn.functional as F
+import tqdm
+
+from satsim.architecture import Module, Timer, VoidStateDict, constants
+from satsim.data import OrbitalElements, OrbitDict, elem2rv
+from satsim.enviroment import ground_mapping
+from satsim.enviroment.ground_location import (AccessState, GroundLocation,
+                                               GroundLocationStateDict)
+from satsim.enviroment.ground_mapping import (GroundMapping,
+                                              GroundMappingStateDict)
 from satsim.fsw_algorithm.location_pointing import (LocationPointing,
-                                                    LocationPointingStateDict,
-                                                    LocationPointingOutput)
-from satsim.fsw_algorithm.mrp_feedback import (
-    MRPFeedback,
-    MRPFeedbackStateDict,
-)
-from satsim.fsw_algorithm.reaction_wheel_motor_torque import ReactionWheelMotorTorque
-from satsim.data import OrbitalElements, elem2rv
+                                                    LocationPointingOutput,
+                                                    LocationPointingStateDict)
+from satsim.fsw_algorithm.mrp_feedback import MRPFeedback, MRPFeedbackStateDict
+from satsim.fsw_algorithm.reaction_wheel_motor_torque import \
+    ReactionWheelMotorTorque
+from satsim.simulation.base.battery_base import BatteryStateDict
+from satsim.simulation.eclipse import compute_shadow_factor
+from satsim.simulation.gravity import (Ephemeris, GravityField,
+                                       PointMassGravityBody, SpiceInterface)
+from satsim.simulation.power import NoBattery, SimpleSolarPanel
+from satsim.simulation.reaction_wheels import (HoneywellHR12Small,
+                                               ReactionWheels, expand)
+from satsim.simulation.simple_navigation import SimpleNavigator
+from satsim.simulation.spacecraft import (Spacecraft, SpacecraftStateDict,
+                                          SpacecraftStateOutput)
+from satsim.utils import dict_recursive_apply, move_to, mrp_to_rotation_matrix
+
+
+class ReactionWheelConfig(TypedDict):
+    mech_to_elec_efficiency: list[float]
+    base_power: list[float]
+
+
+class GroundMappingConfig(TypedDict):
+    half_field_of_view: list[float]
+
+
+class MRPControlConfig(TypedDict):
+    k: list[float]
+    ki: list[float]
+    p: list[float]
+    integral_limit: list[float]
+
+
+class SolarPanelConfig(TypedDict):
+    panel_normal_B_B: list[tuple[float, float, float]]
+    panel_area: list[float]
+    panel_efficiency: list[float]
+
+
+class ConstellationConfig(TypedDict):
+    n: int
+    reaction_wheel: ReactionWheelConfig
+    orbits: OrbitDict
+    ground_mapping: GroundMappingConfig
+    mrp_control: MRPControlConfig
+    solar_panel: SolarPanelConfig
 
 
 class RemoteSensingConstellationStateDict(TypedDict):
@@ -62,20 +79,20 @@ class RemoteSensingConstellationStateDict(TypedDict):
 
 class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
 
-    def __init__(self, *args, n: int, **kwargs):
+    def __init__(self, *args, config: ConstellationConfig, **kwargs):
         super().__init__(*args, **kwargs)
-        self._n = n
+        self._n = config['n']
 
         self._setup_gravity_field()
 
-        reaction_wheels = self._setup_reaction_wheels()
+        reaction_wheels = self._setup_reaction_wheels(config['reaction_wheel'])
 
-        orbits = OrbitalElements.sample(self._n)
+        orbits = OrbitalElements.from_dict(config['orbits'])
         r, v = elem2rv(constants.MU_EARTH, elements=orbits)
 
         self._spacecraft = Spacecraft(
             timer=self._timer,
-            mass=torch.rand(self._n),
+            mass=torch.ones(self._n),
             moment_of_inertia_matrix_wrt_body_point=torch.eye(3).expand(
                 self._n, 3, 3),
             position_BNp_N=r,
@@ -85,7 +102,14 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
             reaction_wheels=reaction_wheels,
         )
 
-        self._setup_solar_panel()
+        self._solar_panel = SimpleSolarPanel(
+            timer=self._timer,
+            panel_normal_B_B=torch.tensor(
+                config['solar_panel']['panel_normal_B_B']),
+            panel_area=torch.tensor(config['solar_panel']['panel_area']),
+            panel_efficiency=torch.tensor(
+                config['solar_panel']['panel_efficiency']),
+        )
         self._battery = NoBattery(timer=self._timer)
 
         self._navigator = SimpleNavigator(timer=self._timer)
@@ -103,15 +127,17 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
             minimum_elevation=torch.zeros(self._n),
             maximum_range=torch.full([self._n], 1e9),
             camera_direction_B_B=torch.tensor([0, 0, 1]).expand(self._n, 3),
-            half_field_of_view=torch.randn(self._n) / 10 + 0.25,
+            half_field_of_view=torch.tensor(
+                config['ground_mapping']['half_field_of_view']),
         )
 
         self._mrp_control = MRPFeedback(
             timer=self._timer,
-            k=torch.rand(self._n) * 5 + 5,
-            ki=torch.rand(self._n) * 1e-3,
-            p=torch.rand(self._n) * 30 + 20,
-            integral_limit=torch.rand(self._n) * 1e-3,
+            k=torch.tensor(config['mrp_control']['k']),
+            ki=torch.tensor(config['mrp_control']['ki']),
+            p=torch.tensor(config['mrp_control']['p']),
+            integral_limit=torch.tensor(
+                config['mrp_control']['integral_limit']),
         )
         self._reaction_wheel_motor_torque = ReactionWheelMotorTorque(
             timer=self._timer,
@@ -120,11 +146,11 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
 
     @property
     def spice_interface(self) -> SpiceInterface:
-        return self._gravity_field.spice_interface
+        return cast(SpiceInterface, self._gravity_field.spice_interface)
 
     @property
     def reaction_wheels(self) -> ReactionWheels:
-        return self._spacecraft.reaction_wheels
+        return cast(ReactionWheels, self._spacecraft.reaction_wheels)
 
     def _setup_gravity_field(self) -> None:
         sun = PointMassGravityBody.create_sun(timer=self._timer)
@@ -144,31 +170,24 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
             gravity_bodies=[sun, earth],
         )
 
-    def _setup_reaction_wheels(self) -> ReactionWheels:
+    def _setup_reaction_wheels(
+        self,
+        config: ReactionWheelConfig,
+    ) -> ReactionWheels:
         reaction_wheels = expand(
             [self._n],
             [
                 HoneywellHR12Small.build(
-                    mech_to_elec_efficiency=random.random(),
-                    base_power=random.random() * 2 + 5,
-                ) for _ in range(3)
+                    mech_to_elec_efficiency=config['mech_to_elec_efficiency']
+                    [i],
+                    base_power=config['base_power'][i],
+                ) for i in range(3)
             ],
         )
 
         return ReactionWheels(
             timer=self._timer,
             reaction_wheels=reaction_wheels,
-        )
-
-    def _setup_solar_panel(self) -> None:
-        direction = torch.rand(self._n, 3)
-        direction = direction / direction.norm(dim=-1, keepdim=True)
-
-        self._solar_panel = SimpleSolarPanel(
-            timer=self._timer,
-            panel_direction_in_body=direction,
-            panel_area=torch.rand(self._n) / 10 + 0.5,
-            panel_efficiency=torch.rand(self._n) / 10 + 0.3,
         )
 
     # def _get_initial_attitude(self, position_BN_N: torch.Tensor) -> torch.Tensor:
@@ -207,10 +226,10 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
         position_PN_N = earth_ephemeris['position_CN_N']
 
         shadow_factor = compute_shadow_factor(
-            r_HN_N=position_SN_N,
-            r_PN_N=position_PN_N,
-            r_BN_N=spacecraft_state_output.position_BN_N,
-            planet_radii=torch.tensor([constants.REQ_EARTH]),
+            position_SN_N=position_SN_N,
+            position_PN_N=position_PN_N,
+            position_BN_N=spacecraft_state_output.position_BN_N,
+            planet_radius=torch.tensor([constants.REQ_EARTH]),
         )
 
         battery_state_dict = state_dict['_battery']
@@ -229,9 +248,9 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
         navigator_state_dict = state_dict['_navigator']
         navigator_state_dict, (_, ) = self._navigator(
             navigator_state_dict,
-            position_in_inertial=spacecraft_state_output.position_BN_N,
-            mrp_attitude_in_inertial=attitude_BN,
-            sun_position_in_inertial=position_SN_N,
+            position_BN_N=spacecraft_state_output.position_BN_N,
+            attitude_BN=attitude_BN,
+            position_SN_N=position_SN_N,
         )
 
         pointing_location_state_dict = state_dict['_pointing_location']
@@ -268,8 +287,7 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
             state_dict=mrp_control_state_dict,
             sigma_BR=pointing_guide_output.attitude_BR,
             omega_BR_B=pointing_guide_output.angular_velocity_BR_B,
-            omega_RN_B=torch.zeros_like(
-                pointing_guide_output.angular_velocity_BR_B),
+            omega_RN_B=pointing_guide_output.angular_velocity_RN_B,
             domega_RN_B=torch.zeros_like(
                 pointing_guide_output.angular_velocity_BR_B),
             wheel_speeds=reaction_wheels_state_dict['dynamic_params']
@@ -304,7 +322,22 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
         battery_state_dict, _ = self._battery(state_dict=battery_state_dict)
         state_dict['_battery'] = battery_state_dict
 
-        return state_dict, (access_state, )
+        position_LB_N = torch.zeros(
+            3) - spacecraft_state_output.position_BN_N  # [b, ..., 3]
+
+        # principle rotation angle to point pHat at location
+        direction_cosine_matrix_BN = mrp_to_rotation_matrix(
+            attitude_BN)  # [b, ..., 3, 3]
+        position_LB_B = torch.einsum("...ij,...j->...i",
+                                     direction_cosine_matrix_BN, position_LB_N)
+        position_LB_B_unit = F.normalize(position_LB_B, dim=-1)
+
+        dum1 = torch.sum(torch.tensor([0., 0., 1.]) * position_LB_B_unit,
+                         dim=-1)
+        dum1 = torch.clamp(dum1, -1.0, 1.0)
+        angle_error = torch.acos(dum1)
+
+        return state_dict, (angle_error, )
 
     def setup_target(
         self,
@@ -324,10 +357,14 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
 
 
 if __name__ == '__main__':
-    satellite_number = 1
     timer = Timer(1.)
-    simulator = RemoteSensingConstellation(timer=timer, n=satellite_number)
-    simulator_state_dict = simulator.reset()
+    with open('example/config.json', 'r') as f:
+        config = json.load(f)
+    simulator_state_dict = torch.load('simulator_state_dict.pth')
+
+    simulator = RemoteSensingConstellation(timer=timer, config=config)
+
+    satellite_number = config['n']
     timer.reset()
 
     simulator.setup_target(
@@ -337,13 +374,20 @@ if __name__ == '__main__':
 
     p_bar = tqdm.tqdm(total=180 / timer.dt + 1)
     access_state: AccessState
+    angle_errors = []
 
     while timer.time <= 180.:
-        simulator_state_dictaccess_state, (access_state, ) = simulator(
+        simulator_state_dictaccess_state, (angle_error, ) = simulator(
             state_dict=simulator_state_dict)
         timer.step()
         p_bar.update(1)
+        angle_errors.append(angle_error.cpu().item())
 
-        previous_state = deepcopy(simulator_state_dict)
+        # previous_state = deepcopy(simulator_state_dict)
 
-    print(access_state.has_access)
+    plt.plot(angle_errors)
+    plt.xlabel('Timestep')
+    plt.ylabel('Angle Error (rad)')
+    plt.title('Angle Error over Time')
+    p_bar.close()
+    plt.savefig('angle_error.png')

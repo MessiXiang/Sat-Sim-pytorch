@@ -84,14 +84,14 @@ class GroundLocation(Module[GroundLocationStateDict]):
     ) -> tuple[GroundLocationStateDict, tuple[AccessState, Tensor, Tensor]]:
         """
         Forward pass for ground location module.
-        
+
         Args:
             state_dict: Current state dictionary
             spacecraft_states: Spacecraft state information
             planet_state: Planet state information
             position_LP_P: Position vector from planet center to ground location in planet-fixed frame
             direction_cosine_matrix_Planet2Location: Direction cosine matrix from planet-fixed to ground location frame
-            
+
         Returns:
             Updated state dictionary with access information
         """
@@ -150,9 +150,8 @@ class GroundLocation(Module[GroundLocationStateDict]):
         azimuth = torch.atan2(sin_azimuth, cos_azimuth).squeeze(-1)
 
         # Velocity in local frame
-
         omega_PN_cross_position_BP_N = torch.cross(
-            angular_velocity_PN_N.unsqueeze(-2),
+            angular_velocity_PN_N,
             position_BP_N,
             dim=-1,
         )
@@ -211,12 +210,12 @@ class GroundLocation(Module[GroundLocationStateDict]):
     ) -> GroundLocationStateDict:
         """
         Specify the ground location from planet-centered latitude, longitude, altitude position.
-        
+
         Args:
             latitude: Latitude in radians
-            longitude: Longitude in radians  
+            longitude: Longitude in radians
             altitude: Altitude in meters
-            
+
         Returns:
             Tuple of (position_LP_P, direction_cosine_matrix_Planet2Inertial)
         """
@@ -243,10 +242,10 @@ class GroundLocation(Module[GroundLocationStateDict]):
     ) -> GroundLocationStateDict:
         """
         Specify the ground location from planet-centered, planet-fixed coordinates.
-        
+
         Args:
             position_LP_P: Position in planet-centered, planet-fixed coordinates (Tensor)
-            
+
         Returns:
             Tuple of (position_LP_P, direction_cosine_matrix_Planet2Inertial)
         """
@@ -270,12 +269,12 @@ class GroundLocation(Module[GroundLocationStateDict]):
     ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
         """
         Update inertial positions and compute angular velocity.
-        
+
         Args:
             state_dict: Current state dictionary
             position_LP_P: Position vector from planet center to ground location in planet-fixed frame
             planet_state: Planet state information
-            
+
         Returns:
             Tuple of (position_LP_P, position_LN_N, omega_Planet [3], position_LP_N_unit [3])
         """
@@ -298,10 +297,8 @@ class GroundLocation(Module[GroundLocationStateDict]):
             direction_cosine_matrix_CN_dot,
             direction_cosine_matrix_CN,
         )
-        angular_velocity_PN_N = torch.stack([
-            angular_velocity_tilde_PN_N[2, 1],
-            angular_velocity_tilde_PN_N[0, 2], angular_velocity_tilde_PN_N[1,
-                                                                           0]
-        ])
+        rows = [2, 0, 1]
+        cols = [1, 2, 0]
+        angular_velocity_PN_N = angular_velocity_tilde_PN_N[:, rows, cols]
 
         return position_LP_N, position_LN_N, angular_velocity_PN_N, position_LP_N_unit

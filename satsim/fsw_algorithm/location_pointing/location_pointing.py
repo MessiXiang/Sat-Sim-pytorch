@@ -21,7 +21,8 @@ class LocationPointingStateDict(TypedDict):
 class LocationPointingOutput(NamedTuple):
     attitude_BR: torch.Tensor
     angular_velocity_BR_B: torch.Tensor
-    attitude_BN: torch.Tensor
+    angular_velocity_RN_B: torch.Tensor
+    attitude_RN: torch.Tensor
     angular_velocity_RN_N: torch.Tensor
 
 
@@ -30,7 +31,7 @@ class LocationPointing(Module[LocationPointingStateDict]):
     def __init__(
         self,
         *args,
-        pointing_direction_B_B: torch.Tensor | None = None,  # [b, ..., 3]
+        pointing_direction_B_B: torch.Tensor,  # [b, ..., 3]
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
@@ -147,7 +148,7 @@ class LocationPointing(Module[LocationPointingStateDict]):
             )
 
         # compute sigma_RN
-        attitude_BN = add_mrp(
+        attitude_RN = add_mrp(
             attitude_BN,  # N in B
             -attitude_BR,
         )
@@ -162,16 +163,20 @@ class LocationPointing(Module[LocationPointingStateDict]):
             angular_velocity_BR_B = torch.einsum("...ij,...j->...i", binv,
                                                  sigma_dot_BR)
 
+        angular_velocity_RN_B = angular_velocity_BN_B - angular_velocity_BR_B
         angular_velocity_RN_N = torch.einsum(
-            "...ji,...j->...i", direction_cosine_matrix_BN,
-            angular_velocity_BN_B - angular_velocity_BR_B)
+            "...ji,...j->...i",
+            direction_cosine_matrix_BN,
+            angular_velocity_RN_B,
+        )
 
         return (
             LocationPointingStateDict(attitude_BR_old=attitude_BR),
             LocationPointingOutput(
                 attitude_BR=attitude_BR,
                 angular_velocity_BR_B=angular_velocity_BR_B,
-                attitude_BN=attitude_BN,
+                angular_velocity_RN_B=angular_velocity_RN_B,
+                attitude_RN=attitude_RN,
                 angular_velocity_RN_N=angular_velocity_RN_N,
             ),
         )

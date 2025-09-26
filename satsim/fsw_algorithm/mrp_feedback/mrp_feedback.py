@@ -19,7 +19,7 @@ class MRPFeedback(Module[MRPFeedbackStateDict]):
         ki: torch.Tensor,
         p: torch.Tensor,
         integral_limit: torch.Tensor,
-        control_law_type: torch.BoolTensor | None = None,
+        control_law_type: torch.Tensor | None = None,
         known_torque_point_b_in_body: torch.Tensor | None = None,
         **kwargs,
     ):
@@ -103,8 +103,8 @@ class MRPFeedback(Module[MRPFeedbackStateDict]):
         dt = 0. if self._timer.time <= self._timer.dt else self._timer.dt
 
         omega_BN_B = omega_BR_B + omega_RN_B
-        z = torch.zeros_like(omega_BN_B)
 
+        # if integrate is on
         integral_mask = self.ki > 0
         integral_sigma = torch.where(
             integral_mask.unsqueeze(-1),
@@ -113,8 +113,8 @@ class MRPFeedback(Module[MRPFeedbackStateDict]):
         )
 
         integral_limit = self.integral_limit.unsqueeze(-1)
-        clamp_mask = integral_mask.unsqueeze(-1) & (torch.abs(integral_sigma)
-                                                    > integral_limit)
+        clamp_mask = (integral_mask.unsqueeze(-1) &
+                      (torch.abs(integral_sigma) > integral_limit))
         integral_sigma = torch.where(
             clamp_mask,
             torch.copysign(integral_limit, integral_sigma),
@@ -125,41 +125,49 @@ class MRPFeedback(Module[MRPFeedbackStateDict]):
 
         z = torch.where(
             integral_mask.unsqueeze(-1),
-            integral_sigma + torch.matmul(
+            integral_sigma + torch.einsum(
+                '...ij, ...j -> ...i',
                 inertia_spacecraft_point_b_in_body,
-                omega_BR_B.unsqueeze(-1),
-            ).squeeze(-1),  # [b, 3]
-            z,
+                omega_BR_B,
+            ),  # [b, 3]
+            0.,
         )
 
-        integral_feedback_output = z * self.ki.unsqueeze(
-            -1) * self.p.unsqueeze(-1)  # v3_5
-        attitude_control_torque = sigma_BR * self.k.unsqueeze(
-            -1) + omega_BR_B * self.p.unsqueeze(-1) + integral_feedback_output
+        integral_feedback_output = (z * self.ki.unsqueeze(-1) *
+                                    self.p.unsqueeze(-1))  # v3_5
+        attitude_control_torque = (sigma_BR * self.k.unsqueeze(-1) +
+                                   omega_BR_B * self.p.unsqueeze(-1) +
+                                   integral_feedback_output)  # Lr
 
-        temp1 = torch.matmul(
+        angular_momentum_BN_B = torch.einsum(
+            '...ij,...j -> ...i',
             inertia_spacecraft_point_b_in_body,
-            omega_BN_B.unsqueeze(-1),
-        ).squeeze(-1)
-
-        temp1 = (reaction_wheels_inertia_wrt_spin * (torch.matmul(
-            omega_BN_B.unsqueeze(-2),
+            omega_BN_B,
+        )
+        angular_momentum = ((reaction_wheels_inertia_wrt_spin * (torch.einsum(
+            '...i,...ij->j',
+            omega_BN_B,
             reaction_wheels_spin_axis,
-        ) + wheel_speeds) * reaction_wheels_spin_axis).sum(-1) + temp1
+        ) + wheel_speeds) * reaction_wheels_spin_axis).sum(-1) +
+                            angular_momentum_BN_B)  # v3_6
 
         temp2 = torch.where(
             self.control_law_type,
             omega_BN_B,
             omega_RN_B + z * self.ki.unsqueeze(-1),
-        )
+        )  # v3_8
         attitude_control_torque = attitude_control_torque + torch.cross(
-            temp1,
+            angular_momentum,
             temp2,
             dim=-1,
         )
-        attitude_control_torque = attitude_control_torque + torch.matmul(
+        attitude_control_torque = attitude_control_torque + torch.einsum(
+            '...ij,...j -> ...i',
             inertia_spacecraft_point_b_in_body,
-            (omega_BN_B.cross(omega_RN_B, dim=-1) - domega_RN_B).unsqueeze(-1),
-        ).squeeze(-1) + self.known_torque_point_b_in_body
+            (omega_BN_B.cross(omega_RN_B, dim=-1) - domega_RN_B),
+        ) + self.known_torque_point_b_in_body
 
-        return state_dict, (-attitude_control_torque, integral_feedback_output)
+        return state_dict, (
+            -attitude_control_torque,
+            -integral_feedback_output,
+        )
