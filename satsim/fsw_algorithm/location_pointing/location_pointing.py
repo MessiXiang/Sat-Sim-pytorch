@@ -15,6 +15,7 @@ from satsim.utils import add_mrp, mrp_to_rotation_matrix
 
 class LocationPointingStateDict(TypedDict):
     attitude_BR_old: NotRequired[torch.Tensor]
+    angular_velocity_RN_B_old: NotRequired[torch.Tensor]
     # [3] / [batch, ..., 3]
 
 
@@ -22,6 +23,7 @@ class LocationPointingOutput(NamedTuple):
     attitude_BR: torch.Tensor
     angular_velocity_BR_B: torch.Tensor
     angular_velocity_RN_B: torch.Tensor
+    angular_velocity_RN_B_dot: torch.Tensor
     attitude_RN: torch.Tensor
     angular_velocity_RN_N: torch.Tensor
 
@@ -157,11 +159,11 @@ class LocationPointing(Module[LocationPointingStateDict]):
         if 'attitude_BR_old' in state_dict:
             attitude_BR_old = state_dict['attitude_BR_old']
             difference = attitude_BR - attitude_BR_old
-            sigma_dot_BR = difference / self._timer.dt
+            attitude_BR_dot = difference / self._timer.dt
             binv = _binv_mrp(attitude_BR)
-            sigma_dot_BR = 4 * sigma_dot_BR
+            attitude_BR_dot = 4 * attitude_BR_dot
             angular_velocity_BR_B = torch.einsum("...ij,...j->...i", binv,
-                                                 sigma_dot_BR)
+                                                 attitude_BR_dot)
 
         angular_velocity_RN_B = angular_velocity_BN_B - angular_velocity_BR_B
         angular_velocity_RN_N = torch.einsum(

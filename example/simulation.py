@@ -126,7 +126,7 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
             timer=self._timer,
             minimum_elevation=torch.zeros(self._n),
             maximum_range=torch.full([self._n], 1e9),
-            camera_direction_B_B=torch.tensor([0, 0, 1]).expand(self._n, 3),
+            camera_direction_B_B=torch.tensor([0, 0, 1.]).expand(self._n, 3),
             half_field_of_view=torch.tensor(
                 config['ground_mapping']['half_field_of_view']),
         )
@@ -253,6 +253,22 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
             position_SN_N=position_SN_N,
         )
 
+        ground_mapping_state_dict = state_dict['_ground_mapping']
+        ground_mapping_state_dict, (
+            mapping_access_state,
+            position_LN_N,
+            position_LP_N,
+        ) = self._ground_mapping(
+            ephemeris=earth_ephemeris,
+            position_BN_N=spacecraft_state_output.position_BN_N,  # [n_sc, 3]
+            velocity_BN_N=spacecraft_state_output.velocity_BN_N,
+            attitude_BN=attitude_BN,
+            position_LP_P=self.
+            _position_LP_P,  # [n_p, 3] - p stands for mapping point
+            equatorial_radius=constants.REQ_EARTH,
+            polar_radius=constants.REQ_EARTH,
+        )
+
         pointing_location_state_dict = state_dict['_pointing_location']
         pointing_location_state_dict, (
             access_state, position_LP_N,
@@ -337,7 +353,7 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
         dum1 = torch.clamp(dum1, -1.0, 1.0)
         angle_error = torch.acos(dum1)
 
-        return state_dict, (angle_error, )
+        return state_dict, (angle_error, mapping_access_state)
 
     def setup_target(
         self,
@@ -352,6 +368,7 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
             constants.REQ_EARTH,
         )
         state_dict['_pointing_location'] = pointing_location_state_dict
+        self._position_LP_P = targets_PCPF
 
         return state_dict
 
@@ -369,7 +386,7 @@ if __name__ == '__main__':
 
     simulator.setup_target(
         simulator_state_dict,
-        torch.zeros(satellite_number, 3),
+        torch.ones(satellite_number, 3),
     )
 
     p_bar = tqdm.tqdm(total=180 / timer.dt + 1)
@@ -377,11 +394,15 @@ if __name__ == '__main__':
     angle_errors = []
 
     while timer.time <= 180.:
-        simulator_state_dictaccess_state, (angle_error, ) = simulator(
-            state_dict=simulator_state_dict)
+        simulator_state_dictaccess_state, (
+            angle_error,
+            mapping_access_state,
+        ) = simulator(state_dict=simulator_state_dict)
         timer.step()
         p_bar.update(1)
         angle_errors.append(angle_error.cpu().item())
+        if mapping_access_state.has_access.all():
+            breakpoint()
 
         # previous_state = deepcopy(simulator_state_dict)
 

@@ -1,4 +1,8 @@
-__all__ = ['ReactionWheelsStateDict', 'ReactionWheels']
+__all__ = [
+    'ReactionWheelsStateDict',
+    'ReactionWheels',
+    'ReactionWheelsDynamicParams',
+]
 from dataclasses import fields
 from typing import Iterable, TypedDict
 
@@ -6,13 +10,8 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 
-from ..base import (
-    BackSubMatrices,
-    BaseStateEffector,
-    StateEffectorStateDict,
-    BatteryStateDict,
-    PowerNodeMixin,
-)
+from ..base import (BackSubMatrices, BaseStateEffector, BatteryStateDict,
+                    PowerNodeMixin, StateEffectorStateDict)
 from .reaction_wheels import ReactionWheel
 
 
@@ -189,12 +188,11 @@ class ReactionWheels(
         dynamic_params = state_dict['dynamic_params']
         current_torque = state_dict['current_torque']
 
-        angular_acceleration = \
-            current_torque / self.moment_of_inertia_wrt_spin - \
-            torch.matmul(
+        angular_acceleration = (
+            current_torque / self.moment_of_inertia_wrt_spin - torch.matmul(
                 angular_velocity_dot.unsqueeze(-2),
                 self.spin_axis_in_body,
-            )
+            ))
 
         dynamic_params['angular_velocity'] = angular_acceleration
         return dynamic_params
@@ -321,8 +319,8 @@ class ReactionWheels(
             motor_torque,
         )
 
-        power_saturation_mask = (self.max_power_efficiency > 0) & \
-            (torch.abs(motor_torque * angular_velocity) >=self.max_power_efficiency)
+        power_saturation_mask = ((self.max_power_efficiency > 0) & (torch.abs(
+            motor_torque * angular_velocity) >= self.max_power_efficiency))
         motor_torque = torch.where(
             power_saturation_mask,
             torch.copysign(
@@ -332,9 +330,10 @@ class ReactionWheels(
             motor_torque,
         )
 
-        speed_saturation_mask = (self.max_angular_velocity > 0.) & \
-            (torch.abs(angular_velocity) >= self.max_angular_velocity ) & \
-            (angular_velocity * motor_torque >= 0)
+        speed_saturation_mask = (
+            (self.max_angular_velocity > 0.) &
+            (torch.abs(angular_velocity) >= self.max_angular_velocity) &
+            (angular_velocity * motor_torque >= 0))
         motor_torque = torch.where(
             speed_saturation_mask,
             0.,
