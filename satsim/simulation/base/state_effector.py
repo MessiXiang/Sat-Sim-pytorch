@@ -5,7 +5,7 @@ __all__ = [
     'StateEffectorStateDict',
 ]
 from abc import ABC, abstractmethod
-from typing import Generic, Mapping, TypedDict, TypeVar, cast
+from typing import Any, Generic, Mapping, TypedDict, TypeVar, cast
 
 import torch
 
@@ -16,7 +16,7 @@ class BackSubMatrices(TypedDict):
     # Because we have simplified satellite as a mass point rather than a rigid body
     # its equation of motion become more simple
     moment_of_inertia_matrix: torch.Tensor
-    ext_force: torch.Tensor
+    ext_force_B_B: torch.Tensor
     ext_torque: torch.Tensor
 
 
@@ -25,7 +25,7 @@ class MassProps(TypedDict):
     moment_of_inertia_matrix_wrt_body_point: torch.Tensor
 
 
-U = TypeVar('U', bound=Mapping[str, torch.Tensor])
+U = TypeVar('U', bound=Mapping[str, Any])
 
 
 class StateEffectorStateDict(TypedDict, Generic[U]):
@@ -40,7 +40,7 @@ class BaseStateEffector(Module[T], ABC):
 
     def reset(self) -> T:
         state_dict = super().reset()
-        mass_props = dict(
+        mass_props = MassProps(
             mass=torch.zeros(1),
             moment_of_inertia_matrix_wrt_body_point=torch.zeros(3, 3),
         )
@@ -80,5 +80,5 @@ class BaseStateEffector(Module[T], ABC):
         integrate_time_step: float,
         *args,
         **kwargs,
-    ) -> U:
+    ) -> U:  # type: ignore
         pass

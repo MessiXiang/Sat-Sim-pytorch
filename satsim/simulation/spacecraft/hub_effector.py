@@ -6,18 +6,18 @@ __all__ = [
 from typing import TypedDict
 
 import torch
-from todd.loggers import master_logger
 
 from satsim.utils import Bmat, mrp_to_rotation_matrix
 
-from ..base.state_effector import BackSubMatrices, MassProps, BaseStateEffector, StateEffectorStateDict
+from ..base.state_effector import (BackSubMatrices, BaseStateEffector,
+                                   MassProps, StateEffectorStateDict)
 
 
 class HubEffectorDynamicParams(TypedDict):
-    position: torch.Tensor  # [3]
-    velocity: torch.Tensor  # [3]
-    attitude: torch.Tensor  # [3]
-    angular_velocity: torch.Tensor  # [3]
+    position_BN_N: torch.Tensor  # [3]
+    velocity_BN_N: torch.Tensor  # [3]
+    attitude_BN: torch.Tensor  # [3]
+    angular_velocity_BN_B: torch.Tensor  # [3]
     grav_velocity: torch.Tensor  # [3]
 
 
@@ -32,11 +32,12 @@ class HubEffector(
         self,
         *args,
         mass: torch.Tensor,
-        moment_of_inertia_matrix_wrt_body_point: torch.Tensor,
-        position: torch.Tensor,
-        velocity: torch.Tensor,
-        attitude: torch.Tensor | None = None,
-        angular_velocity: torch.Tensor | None = None,
+        moment_of_inertia_matrix_wrt_body_point: torch.
+        Tensor,  # TODO：double-check
+        position_BN_N: torch.Tensor,
+        velocity_BN_N: torch.Tensor,
+        attitude_BN: torch.Tensor | None = None,
+        angular_velocity_BN_B: torch.Tensor | None = None,
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
@@ -51,11 +52,12 @@ class HubEffector(
             persistent=False,
         )
 
-        self._position_init = position
-        self._velocity_init = velocity
-        self._attitude_init = torch.zeros(3) if attitude is None else attitude
-        self._angular_velocity_init = torch.zeros(
-            3) if angular_velocity is None else angular_velocity
+        self._position_BN_N_init = position_BN_N
+        self._velocity_BN_N_init = velocity_BN_N
+        self._attitude_BN_init = torch.zeros(
+            3) if attitude_BN is None else attitude_BN
+        self._angular_velocity_BN_B_init = torch.zeros(
+            3) if angular_velocity_BN_B is None else angular_velocity_BN_B
 
     @property
     def mass(self) -> torch.Tensor:
@@ -75,11 +77,11 @@ class HubEffector(
         )
 
         dynamic_params = HubEffectorDynamicParams(
-            position=self._position_init.clone(),
-            velocity=self._velocity_init.clone(),
-            attitude=self._attitude_init.clone(),
-            angular_velocity=self._angular_velocity_init.clone(),
-            grav_velocity=self._velocity_init.clone(),
+            position_BN_N=self._position_BN_N_init.clone(),
+            velocity_BN_N=self._velocity_BN_N_init.clone(),
+            attitude_BN=self._attitude_BN_init.clone(),
+            angular_velocity_BN_B=self._angular_velocity_BN_B_init.clone(),
+            grav_velocity=self._velocity_BN_N_init.clone(),
         )
         state_dict.update(dynamic_params=dynamic_params, mass_props=mass_props)
 
@@ -101,75 +103,71 @@ class HubEffector(
         gravity_acceleration: torch.Tensor,
         spacecraft_mass: torch.Tensor,
     ) -> HubEffectorDynamicParams:
-        """
-        Computes time derivatives of the hub's state, including position, angular velocity, and attitude derivatives.
-        Because in back_substitution_matrices, all tensor if zeros but matrix_d and vec_rot
+        '''
+        Computes the time derivatives of the hub's state.
 
         Args:
             state_dict (HubEffectorStateDict): Dictionary containing the current hub state.
-            rDDot_BN_N (torch.Tensor): 3D vector of the hub's second position derivative in the inertial frame (N).
-            omegaDot_BN_B (torch.Tensor): 3D vector of the hub's angular acceleration in the body frame (B).
-            sigma_BN (torch.Tensor): 3D vector of Modified Rodrigues Parameters (MRP) for hub attitude relative to the inertial frame (N).
-            g_N (torch.Tensor): 3D vector of the gravitational acceleration in the inertial frame (N).
+            integrate_time_step (float): Integration time step.
+            back_substitution_matrices (BackSubMatrices): Matrices for back substitution.
+            gravity_acceleration (torch.Tensor): Gravitational acceleration in inertial frame.
+            spacecraft_mass (torch.Tensor): Mass of the spacecraft.
 
         Returns:
-            HubEffectorStateDict: Updated dictionary with computed state derivatives.
-        """
+            HubEffectorDynamicParams: Updated dynamic parameters with computed state derivatives.
+        '''
         dynamic_params = state_dict['dynamic_params']
-        velocity = dynamic_params['velocity']
-        attitude = dynamic_params['attitude']
-        angular_velocity = dynamic_params['angular_velocity']
+        velocity_BN_N = dynamic_params['velocity_BN_N']
+        attitude_BN = dynamic_params['attitude_BN']
+        angular_velocity_BN_B = dynamic_params['angular_velocity_BN_B']
 
         ext_torque = back_substitution_matrices['ext_torque']
-        ext_force = back_substitution_matrices['ext_force']
+        ext_force_B_B = back_substitution_matrices['ext_force_B_B']
         moment_of_inertia_matrix = back_substitution_matrices[
             'moment_of_inertia_matrix']
 
-        attitude_dot = 0.25 * torch.matmul(
-            Bmat(attitude),
-            angular_velocity.unsqueeze(-1),
-        ).squeeze(-1)
+        attitude_dot = 0.25 * torch.einsum(
+            '...ij,...j->...i',
+            Bmat(attitude_BN),
+            angular_velocity_BN_B,
+        )
 
-        dcm_NB = mrp_to_rotation_matrix(attitude)
+        direction_cosine_matrix_BN = mrp_to_rotation_matrix(attitude_BN)
 
         angular_velocity_dot: torch.Tensor = torch.linalg.solve(
             moment_of_inertia_matrix,
             ext_torque.unsqueeze(-1),
         )
-        velocity_dot = torch.matmul(
-            dcm_NB,
-            (ext_force / spacecraft_mass.unsqueeze(-1)).unsqueeze(-1),
-        ).squeeze(-1) + gravity_acceleration
+        velocity_dot = torch.einsum(
+            '...ij,...i->...j',
+            direction_cosine_matrix_BN,
+            (ext_force_B_B / spacecraft_mass.unsqueeze(-1)),
+        ) + gravity_acceleration
         grav_velocity_dot = gravity_acceleration
-        position_dot = velocity.clone()
+        position_dot = velocity_BN_N.clone()
 
         return HubEffectorDynamicParams(
-            position=position_dot,
-            velocity=velocity_dot.squeeze(-1),
-            attitude=attitude_dot,
-            angular_velocity=angular_velocity_dot.squeeze(-1),
+            position_BN_N=position_dot,
+            velocity_BN_N=velocity_dot.squeeze(-1),
+            attitude_BN=attitude_dot,
+            angular_velocity_BN_B=angular_velocity_dot.squeeze(-1),
             grav_velocity=grav_velocity_dot,
         )
 
-    def normalize_attitude(
+    def modify_states(
         self,
         state_dict: HubEffectorStateDict,
+        integrate_time_step: float,
     ) -> HubEffectorStateDict:
-        sigma = state_dict['dynamic_params']['attitude']
-        sigma_norm = sigma.norm(dim=-1, keepdim=True)
-        normalize_mask = sigma_norm > 1
-
-        if torch.any(normalize_mask):
-            master_logger.warning(
-                "The norm of MRP is greater than 1. Normalizing it.")
-
-            sigma = torch.where(
-                normalize_mask,
-                -sigma /
-                torch.einsum('...i,...i->...', sigma, sigma).unsqueeze(-1),
-                sigma,
-            )
-            state_dict['dynamic_params']['attitude'] = sigma
+        altitude_BN = state_dict['dynamic_params']['attitude_BN']
+        altitude_BN_norm = altitude_BN.norm(dim=-1, keepdim=True)
+        normalize_mask = altitude_BN_norm > 1
+        altitude_BN = torch.where(
+            normalize_mask,
+            -altitude_BN / altitude_BN_norm,
+            altitude_BN,
+        )
+        state_dict['dynamic_params']['attitude_BN'] = altitude_BN
 
         return state_dict
 
@@ -179,5 +177,7 @@ class HubEffector(
     ) -> HubEffectorStateDict:
         dynamic_params = state_dict['dynamic_params']
 
-        dynamic_params['grav_velocity'] = dynamic_params['velocity'].clone()
+        dynamic_params['grav_velocity'] = dynamic_params[
+            'velocity_BN_N'].clone()
+
         return state_dict
