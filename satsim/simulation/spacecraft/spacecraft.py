@@ -402,7 +402,7 @@ class Spacecraft(
         position_BN_N = state_dict['_hub']['dynamic_params']['position']
         velocity_BN_N = state_dict['_hub']['dynamic_params']['velocity']
         if self.gravity_field is not None:
-            position_BN_N, velocity_BN_N = self._gravity_field.update_inertial_position_and_velocity(
+            position_BN_N, velocity_BN_N = self.gravity_field.update_inertial_position_and_velocity(
                 position_BN_N,
                 velocity_BN_N,
             )

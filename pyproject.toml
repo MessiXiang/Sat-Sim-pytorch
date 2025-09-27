@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "SatSim"
-requires-python= ">=3.9"
+requires-python= ">=3.11"
 description = "A simulation framework based on pytorch for satellites"
 readme = "README.md"
 dynamic = ["version","dependencies"]

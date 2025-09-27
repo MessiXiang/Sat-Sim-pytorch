@@ -3,16 +3,11 @@ import torch
 import tqdm
 
 from satsim.architecture import Timer, constants
-from satsim.simulation.reaction_wheels import (
-    HoneywellHR12Small,
-    ReactionWheels,
-    ReactionWheelsStateDict,
-)
-from satsim.simulation.spacecraft import (
-    Spacecraft,
-    SpacecraftStateDict,
-    SpacecraftStateOutput,
-)
+from satsim.simulation.reaction_wheels import (HoneywellHR12Small,
+                                               ReactionWheels,
+                                               ReactionWheelsStateDict)
+from satsim.simulation.spacecraft import (Spacecraft, SpacecraftStateDict,
+                                          SpacecraftStateOutput)
 
 
 @pytest.mark.parametrize('axis', [0, 1, 2])
@@ -35,10 +30,10 @@ def test_reaction_wheels_dynamic_without_torque(axis: int, ) -> None:
             torch.ones(3) * moment_of_inertia +
             reaction_wheels.moment_of_inertia_wrt_spin.squeeze(-2)).unsqueeze(
                 0),
-        position=torch.zeros(1, 3),
-        velocity=torch.zeros(1, 3),
-        attitude=torch.zeros(1, 3),
-        angular_velocity=angular_velocity_init,
+        position_BN_N=torch.zeros(1, 3),
+        velocity_BN_N=torch.zeros(1, 3),
+        attitude_BN=torch.zeros(1, 3),
+        angular_velocity_BN_B=angular_velocity_init,
         reaction_wheels=reaction_wheels,
     )
 
@@ -74,11 +69,11 @@ def test_reaction_wheels_dynamic_without_torque(axis: int, ) -> None:
         timer.step()
 
         assert torch.allclose(
-            spacecraft_output.angular_velocity,
+            spacecraft_output.angular_velocity_BN_B,
             angular_velocity_init,
         )
 
-        angle = 4. * torch.arctan(spacecraft_output.attitude)
+        angle = 4. * torch.arctan(spacecraft_output.attitude_BN)
 
         assert torch.allclose(
             angle,
@@ -114,10 +109,10 @@ def test_reaction_wheels_dynamic_with_torque(axis: int, ) -> None:
             torch.ones(3) * moment_of_inertia +
             reaction_wheels.moment_of_inertia_wrt_spin.squeeze(-2)).unsqueeze(
                 0),
-        position=torch.zeros(1, 3),
-        velocity=torch.zeros(1, 3),
-        attitude=torch.zeros(1, 3),
-        angular_velocity=angular_velocity_init,
+        position_BN_N=torch.zeros(1, 3),
+        velocity_BN_N=torch.zeros(1, 3),
+        attitude_BN=torch.zeros(1, 3),
+        angular_velocity_BN_B=angular_velocity_init,
         reaction_wheels=reaction_wheels,
     )
 
@@ -155,13 +150,13 @@ def test_reaction_wheels_dynamic_with_torque(axis: int, ) -> None:
         timer.step()
 
         assert torch.allclose(
-            spacecraft_output.angular_velocity,
+            spacecraft_output.angular_velocity_BN_B,
             angular_velocity_init -
             current_torque.squeeze(1) / moment_of_inertia * timer.time,
             atol=1e-5,
         )
 
-        angle = 4. * torch.arctan(spacecraft_output.attitude)
+        angle = 4. * torch.arctan(spacecraft_output.attitude_BN)
         assert torch.allclose(
             angle,
             angular_velocity_init * timer.time - 0.5 *

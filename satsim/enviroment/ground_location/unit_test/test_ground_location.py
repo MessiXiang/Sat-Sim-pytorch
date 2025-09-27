@@ -1,14 +1,13 @@
+import math
+
+import numpy as np
 import pytest
 import torch
-import numpy as np
-import math
-from satsim.enviroment.ground_location import (
-    GroundLocation,
-    GroundLocationStateDict,
-    SpaceCraftStateDict,
-    Ephemeris,
-)
+
 from satsim.architecture.timer import Timer
+from satsim.enviroment.ground_location import (GroundLocation,
+                                               GroundLocationStateDict)
+from satsim.simulation.gravity import Ephemeris
 
 
 def test_range():
@@ -35,12 +34,16 @@ def test_range():
         minimum_elevation=80.0 * torch.pi /
         180.0,  # 80 degrees minimum elevation
         timer=Timer(dt=1.0))
+    state_dict = ground_location.reset()
 
     # Set ground station location (equator, 0 degrees longitude)
-    position_LP_P_init, direction_cosine_matrix_Planet2Location = ground_location.specify_location(
+    position_LP_P_init, direction_cosine_matrix_Planet2Location = ground_location.specify_location_LLA(
+        state_dict=state_dict,
         latitude=torch.tensor(0.0),  # 0 degrees latitude [rad]
         longitude=torch.tensor(0.0),  # 0 degrees longitude [rad]
-        altitude=torch.tensor(0.0)  # altitude [m]
+        altitude=torch.tensor(0.0),  # altitude [m]
+        planet_radius=6378.137e3,
+        polar_radius=6356.752e3,
     )
 
     # SC3: Within height range, but insufficient elevation (79 degrees elevation)
@@ -55,41 +58,21 @@ def test_range():
     position_rotated = rotation_matrix @ torch.tensor([100e3, 0.0, 0.0])
     position_tmp = torch.tensor([6378.137e3, 0.0, 0.0]) + position_rotated
 
-    # Create spacecraft states (batch format)
-    spacecraft_states = SpaceCraftStateDict({
-        'position_BN_N':
-        torch.stack([
+    # Initialize state dictionary
+
+    # Run calculation
+    result = ground_location(
+        state_dict,
+        position_BN_N=torch.stack([
             torch.tensor([6378.137e3 + 100e3, 0.0,
                           0.0]),  # SC1: Within range, 100km height
             torch.tensor([6378.137e3 + 101e3, 0.0,
                           0.0]),  # SC2: Out of range, 101km height
             position_tmp,  # SC3: Within height range, but insufficient elevation (79 degrees elevation)
         ]),
-        'velocity_BN_N':
-        torch.zeros(3, 3),
-        'position_CN_N':
-        torch.stack([
-            torch.tensor([6378.137e3 + 100e3, 0.0, 0.0]),
-            torch.tensor([6378.137e3 + 101e3, 0.0, 0.0]),
-            position_tmp,
-        ]),
-        'velocity_CN_N':
-        torch.zeros(3, 3),
-        'sigma_BN':
-        torch.zeros(3, 3),
-        'omega_BN_B':
-        torch.zeros(3, 3),
-        'omegaDot_BN_B':
-        torch.zeros(3, 3),
-    })
-
-    # Initialize state dictionary
-    state_dict = ground_location.reset()
-
-    # Run calculation
-    result = ground_location(state_dict, spacecraft_states, planet_state,
-                             position_LP_P_init,
-                             direction_cosine_matrix_Planet2Location)
+        velocity_BN_N=torch.zeros(3, 3),
+        ephemeris=planet_state,
+    )
 
     # Get results
     access_states = result['access_states']
@@ -146,7 +129,7 @@ def test_rotation():
                                      timer=Timer(dt=1.0))
 
     # Set ground station location (0 degrees latitude, 10 degrees longitude)
-    position_LP_P_init, direction_cosine_matrix_Planet2Location = ground_location.specify_location(
+    position_LP_P_init, direction_cosine_matrix_Planet2Location = ground_location.specify_location_LLA(
         latitude=torch.tensor(0.0),
         longitude=torch.tensor(10.0 * torch.pi / 180.0),
         altitude=torch.tensor(0.0))
@@ -217,7 +200,7 @@ def test_azimuth_elevation_range_rates():
                                      timer=Timer(dt=1.0))
 
     # Set ground station location (0 degrees latitude, 0 degrees longitude) - Equator position
-    position_LP_P_init, direction_cosine_matrix_Planet2Location = ground_location.specify_location(
+    position_LP_P_init, direction_cosine_matrix_Planet2Location = ground_location.specify_location_LLA(
         latitude=torch.tensor(0.0),
         longitude=torch.tensor(0.0),
         altitude=torch.tensor(0.0))
@@ -366,7 +349,7 @@ def test_ground_location_functionality():
         timer=Timer(dt=1.0))
 
     # Set ground station location (equator, 0 degrees longitude)
-    position_LP_P_init, direction_cosine_matrix_Planet2Location = ground_location.specify_location(
+    position_LP_P_init, direction_cosine_matrix_Planet2Location = ground_location.specify_location_LLA(
         latitude=torch.tensor(0.0),
         longitude=torch.tensor(0.0),
         altitude=torch.tensor(0.0))

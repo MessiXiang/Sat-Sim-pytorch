@@ -21,7 +21,7 @@ class GroundMappingStateDict(TypedDict):
 
 class GroundMapping(Module[GroundMappingStateDict]):
     """Ground mapping module for satellite imaging simulations.
-    
+
     This module evaluates visibility and access conditions for multiple ground mapping points
     from a spacecraft's imager, considering instrument field of view, elevation constraints,
     and range limitations.
@@ -179,8 +179,11 @@ class GroundMapping(Module[GroundMappingStateDict]):
                                         keepdim=True)  # [n_p, n_sc, 1]
         position_BL_N_unit = position_BL_N / position_BL_N_norm  # [n_p, n_sc, 3]
         view_angle = torch.asin(
-            torch.clamp((position_BL_N_unit * position_LP_N_unit).sum(dim=-1),
-                        -1, 1))
+            torch.clamp(
+                (position_BL_N_unit * position_LP_N_unit).sum(dim=-1),
+                -1,
+                1,
+            ))
 
         lla = PCPF2LLA(
             position_LP_P,
@@ -233,8 +236,8 @@ class GroundMapping(Module[GroundMappingStateDict]):
             position_BP_N,
             direction_cosine_matrix_NB,
         )
-        has_access = view_angle > self.minimum_elevation & within_view
 
+        has_access = (view_angle > self.minimum_elevation) & within_view
         return state_dict, (
             AccessState(
                 has_access=has_access,

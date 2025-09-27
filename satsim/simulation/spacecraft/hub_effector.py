@@ -154,7 +154,7 @@ class HubEffector(
             grav_velocity=grav_velocity_dot,
         )
 
-    def modify_states(
+    def normalize_attitude(
         self,
         state_dict: HubEffectorStateDict,
         integrate_time_step: float,

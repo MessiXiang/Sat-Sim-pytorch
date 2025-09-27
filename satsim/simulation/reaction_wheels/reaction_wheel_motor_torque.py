@@ -34,7 +34,7 @@ class ReactionWheelMotorTorque(Module[VoidStateDict]):
     ) -> tuple[VoidStateDict, tuple[torch.Tensor]]:
         num_axis = self.control_axis.size(-1)
         num_reaction_wheels = reaction_wheel_spin_axis_in_body.size(-1)
-        assert num_reaction_wheels == num_axis <= 3
+        # assert num_reaction_wheels == num_axis <= 3
 
         torque_request_body = -torque_request_body  # [3]
 

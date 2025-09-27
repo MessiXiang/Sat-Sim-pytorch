@@ -95,7 +95,7 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
             mass=torch.ones(self._n),
             moment_of_inertia_matrix_wrt_body_point=torch.eye(3).expand(
                 self._n, 3, 3),
-            position_BNp_N=r,
+            position_BN_N=r,
             velocity_BN_N=v,
             angular_velocity_BN_B=torch.zeros(self._n, 3),
             gravity_field=self._gravity_field,
@@ -296,10 +296,7 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
             '_reaction_wheels']
 
         mrp_control_state_dict = state_dict['_mrp_control']
-        mrp_control_state_dict, (
-            attitude_control_torque,
-            integral_feedback_output,
-        ) = self._mrp_control(
+        mrp_control_state_dict, attitude_control_torque = self._mrp_control(
             state_dict=mrp_control_state_dict,
             sigma_BR=pointing_guide_output.attitude_BR,
             omega_BR_B=pointing_guide_output.angular_velocity_BR_B,
@@ -315,6 +312,8 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
             reaction_wheels_spin_axis=self.reaction_wheels.spin_axis_in_body,
         )
         state_dict['_mrp_control'] = mrp_control_state_dict
+
+        attitude_control_torque = attitude_control_torque[0]
 
         reaction_wheels_motor_torque_state_dict = state_dict[
             '_reaction_wheel_motor_torque']
@@ -401,12 +400,10 @@ if __name__ == '__main__':
         timer.step()
         p_bar.update(1)
         angle_errors.append(angle_error.cpu().item())
-        if mapping_access_state.has_access.all():
-            breakpoint()
 
-        # previous_state = deepcopy(simulator_state_dict)
-
+    print(min(angle_errors))
     plt.plot(angle_errors)
+    plt.plot([0.28] * len(angle_errors))
     plt.xlabel('Timestep')
     plt.ylabel('Angle Error (rad)')
     plt.title('Angle Error over Time')

@@ -34,21 +34,21 @@
     },
     "ground_mapping": {
         "half_field_of_view": [
-            0.28
+            0.34
         ]
     },
     "mrp_control": {
         "k": [
-            7.855248
+            7.87
         ],
         "ki": [
             0.000212
         ],
         "p": [
-            28.0
+            6.1
         ],
         "integral_limit": [
-            0.000192
+            0.1
         ]
     },
     "solar_panel": {

@@ -139,13 +139,13 @@ def test_modify_states(hub_effector: HubEffector):
     state_dict = hub_effector.reset()
 
     # Test with normal sigma (norm <= 1)
-    modified_state = hub_effector.modify_states(state_dict, 0.1)
+    modified_state = hub_effector.normalize_attitude(state_dict, 0.1)
     assert torch.allclose(modified_state['dynamic_params']['sigma'],
                           state_dict['dynamic_params']['sigma'])
 
     # Test with sigma norm > 1
     state_dict['dynamic_params']['sigma'] = torch.tensor([1.0, 1.0, 1.0])
-    modified_state = hub_effector.modify_states(state_dict, 0.1)
+    modified_state = hub_effector.normalize_attitude(state_dict, 0.1)
     expected_sigma = -torch.tensor([1.0, 1.0, 1.0]) / torch.tensor(
         [1.0, 1.0, 1.0]).norm()
     assert torch.allclose(modified_state['dynamic_params']['sigma'],

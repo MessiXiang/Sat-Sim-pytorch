@@ -10,3 +10,6 @@ build/
 *.tpc
 *.tls
 *.bsp
+*.json
+*.png
+*.pth
