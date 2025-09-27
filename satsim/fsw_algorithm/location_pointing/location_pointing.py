@@ -15,7 +15,6 @@ from satsim.utils import add_mrp, mrp_to_rotation_matrix
 
 class LocationPointingStateDict(TypedDict):
     attitude_BR_old: NotRequired[torch.Tensor]
-    angular_velocity_RN_B_old: NotRequired[torch.Tensor]
     # [3] / [batch, ..., 3]
 
 
@@ -23,7 +22,6 @@ class LocationPointingOutput(NamedTuple):
     attitude_BR: torch.Tensor
     angular_velocity_BR_B: torch.Tensor
     angular_velocity_RN_B: torch.Tensor
-    angular_velocity_RN_B_dot: torch.Tensor
     attitude_RN: torch.Tensor
     angular_velocity_RN_N: torch.Tensor
 
@@ -171,7 +169,6 @@ class LocationPointing(Module[LocationPointingStateDict]):
             direction_cosine_matrix_BN,
             angular_velocity_RN_B,
         )
-
         return (
             LocationPointingStateDict(attitude_BR_old=attitude_BR),
             LocationPointingOutput(

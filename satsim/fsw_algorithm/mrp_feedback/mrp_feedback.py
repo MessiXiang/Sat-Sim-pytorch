@@ -104,8 +104,8 @@ class MRPFeedback(Module[MRPFeedbackStateDict]):
 
         omega_BN_B = omega_BR_B + omega_RN_B
 
-        integral_sigma = (self.ki.unsqueeze(-1) *
-                          (integral_sigma + dt * sigma_BR))
+        integral_sigma = (integral_sigma +
+                          self.k.unsqueeze(-1) * dt * sigma_BR)
 
         integral_limit = self.integral_limit.unsqueeze(-1)
         clamp_mask = (torch.abs(integral_sigma) > integral_limit)
@@ -117,13 +117,14 @@ class MRPFeedback(Module[MRPFeedbackStateDict]):
 
         state_dict['integral_sigma'] = integral_sigma
 
-        z = integral_sigma + torch.einsum(
+        attitude_error_measure = integral_sigma + torch.einsum(
             '...ij, ...j -> ...i',
             inertia_spacecraft_point_b_in_body,
             omega_BR_B,
         )
 
-        integral_feedback_output = (z * self.ki.unsqueeze(-1) *
+        integral_feedback_output = (attitude_error_measure *
+                                    self.ki.unsqueeze(-1) *
                                     self.p.unsqueeze(-1))  # v3_5
         attitude_control_torque = (sigma_BR * self.k.unsqueeze(-1) +
                                    omega_BR_B * self.p.unsqueeze(-1) +
@@ -144,7 +145,7 @@ class MRPFeedback(Module[MRPFeedbackStateDict]):
         temp2 = torch.where(
             self.control_law_type,
             omega_BN_B,
-            omega_RN_B + z * self.ki.unsqueeze(-1),
+            omega_RN_B + attitude_error_measure * self.ki.unsqueeze(-1),
         )  # v3_8
         attitude_control_torque = attitude_control_torque + torch.cross(
             angular_momentum,
