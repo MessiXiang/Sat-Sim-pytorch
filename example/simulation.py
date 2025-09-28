@@ -8,24 +8,22 @@ import torch.nn.functional as F
 import tqdm
 
 from satsim.architecture import Module, Timer, VoidStateDict, constants
+from satsim.attitude_control.mrp_feedback import (MRPFeedback,
+                                                  MRPFeedbackStateDict)
+from satsim.attitude_guidance.location_pointing import (
+    LocationPointing, LocationPointingOutput, LocationPointingStateDict)
 from satsim.data import OrbitalElements, OrbitDict, elem2rv
-from satsim.enviroment import ground_mapping
 from satsim.enviroment.ground_location import (AccessState, GroundLocation,
                                                GroundLocationStateDict)
 from satsim.enviroment.ground_mapping import (GroundMapping,
                                               GroundMappingStateDict)
-from satsim.fsw_algorithm.location_pointing import (LocationPointing,
-                                                    LocationPointingOutput,
-                                                    LocationPointingStateDict)
-from satsim.fsw_algorithm.mrp_feedback import MRPFeedback, MRPFeedbackStateDict
-from satsim.fsw_algorithm.reaction_wheel_motor_torque import \
-    ReactionWheelMotorTorque
 from satsim.simulation.base.battery_base import BatteryStateDict
 from satsim.simulation.eclipse import compute_shadow_factor
 from satsim.simulation.gravity import (Ephemeris, GravityField,
                                        PointMassGravityBody, SpiceInterface)
 from satsim.simulation.power import NoBattery, SimpleSolarPanel
 from satsim.simulation.reaction_wheels import (HoneywellHR12Small,
+                                               ReactionWheelMotorTorque,
                                                ReactionWheels, expand)
 from satsim.simulation.simple_navigation import SimpleNavigator
 from satsim.simulation.spacecraft import (Spacecraft, SpacecraftStateDict,
