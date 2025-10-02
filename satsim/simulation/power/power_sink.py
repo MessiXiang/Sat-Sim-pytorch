@@ -1,4 +1,7 @@
-__all__ = ['PowerSink']
+__all__ = [
+    'SimplePowerSink',
+    'SimplePowerSinkStateDict',
+]
 
 from typing import TypedDict
 

@@ -17,6 +17,7 @@ ASTRONOMICAL_UNIT = 149597870.7 * 1000.0  # m
 
 # System constants
 UTC_TIME_START = '2019-01-01T12:00:00'
+MAX_TIME_STEP = 3600
 
 # Algorithm parameters
 

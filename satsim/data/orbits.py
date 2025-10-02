@@ -1,85 +1,84 @@
 __all__ = ['OrbitDict', 'OrbitalElements', 'elem2rv']
-import warnings
-import torch
 import dataclasses
-from typing import Any, TypedDict, cast
+import random
+import warnings
+from collections import UserList
+from typing import Any, Iterable, TypedDict, cast
+
+import torch
 from typing_extensions import Self
 
 eps = 1e-15
 
 
 class OrbitDict(TypedDict):
-    eccentricity: Any
-    semi_major_axis: Any
-    inclination: Any
-    right_ascension_of_the_ascending_node: Any
-    argument_of_perigee: Any
-    true_anomaly: Any
+    id: int
+    eccentricity: float
+    semi_major_axis: float
+    inclination: float
+    right_ascension_of_the_ascending_node: float
+    argument_of_perigee: float
+    true_anomaly: float
 
 
 @dataclasses.dataclass(frozen=True)
-class OrbitalElements:
+class OrbitalElement:
     """Orbital elements of a satellite.
 
-    Refer to https://en.wikipedia.org/wiki/Orbital_elements.
+    Refer to https://en.wikipedia.org/wiki/Orbital_
     """
-    semi_major_axis: torch.Tensor
-    eccentricity: torch.Tensor
-    inclination: torch.Tensor
-    right_ascension_of_the_ascending_node: torch.Tensor
-    argument_of_perigee: torch.Tensor
-    true_anomaly: torch.Tensor = torch.zeros(1)
+    id_: int
+    semi_major_axis: float
+    eccentricity: float
+    inclination: float
+    right_ascension_of_the_ascending_node: float
+    argument_of_perigee: float
+    true_anomaly: float
 
     def to_dict(self) -> OrbitDict:
-        d: dict[str, torch.Tensor] = dataclasses.asdict(self)
-        d = {k: v.tolist() for k, v in d.items()}
+        d = dataclasses.asdict(self)
+        d['id'] = d.pop('id_')
         return cast(OrbitDict, d)
 
     @classmethod
     def from_dict(cls, orbit: OrbitDict) -> Self:
         d = cast(dict[str, Any], orbit.copy())
-        d = {k: torch.tensor(v) for k, v in d.items()}
+        d['id_'] = d.pop('id')
         return cls(**d)
 
     @property
-    def data(self) -> list[torch.Tensor]:
+    def data(self) -> list[float]:
         _, *data = dataclasses.astuple(self)
-        return cast(list[torch.Tensor], data)
+        return cast(list[float], data)
 
     @classmethod
-    def sample(cls, size: int | list[int]) -> Self:
-        if isinstance(size, int):
-            size = [size]
-
-        lower_bound = torch.tensor([6.8e6, 0., 0., 0., 0.]).expand(*size, 5)
-        upper_bound = torch.tensor([8e6, 0.005, 180, 360,
-                                    360]).expand(*size, 5)
-        dist = torch.distributions.Uniform(lower_bound, upper_bound)
-        sample = dist.sample()
-        (
-            semi_major_axis,
-            eccentricity,
-            inclination,
-            right_ascension_of_the_ascending_node,
-            argument_of_perigee,
-        ) = sample.unbind(-1)
-        semi_major_axis = torch.round(semi_major_axis, decimals=1)
-        eccentricity = torch.round(eccentricity, decimals=6)
-        inclination = torch.round(inclination, decimals=1)
-        right_ascension_of_the_ascending_node = torch.round(
-            right_ascension_of_the_ascending_node,
-            decimals=1,
-        )
-        argument_of_perigee = torch.round(argument_of_perigee, decimals=1)
+    def sample(cls, id_: int) -> Self:
 
         return cls(
-            semi_major_axis=semi_major_axis,
-            eccentricity=eccentricity,
-            inclination=inclination,
-            right_ascension_of_the_ascending_node=
-            right_ascension_of_the_ascending_node,
-            argument_of_perigee=argument_of_perigee,
+            id_,
+            round(random.uniform(0, 0.005), 6),
+            round(random.uniform(6.8e6, 8e6), 1),
+            round(random.uniform(0, 180), 1),
+            round(random.uniform(0, 360), 1),
+            round(random.uniform(0, 360), 1),
         )
+
+
+class OrbitalElements(UserList[OrbitalElement]):
+
+    @classmethod
+    def from_dicts(cls, configs: Iterable[OrbitDict]) -> Self:
+        return cls([OrbitalElement.from_dict(config) for config in configs])
+
+    def to_dicts(self) -> list[OrbitDict]:
+        return [element.to_dict() for element in self]
+
+    def sample(cls, n: int) -> Self:
+        return cls([OrbitalElement.sample(i) for i in range(n)])
+
+    def to_tensor(self) -> torch.Tensor:
+        data = torch.tensor([element.data for element in self])
+        return data
 
 
 def elem2rv(
@@ -107,53 +106,56 @@ def elem2rv(
     :return:   rVec, position vector
     :return:   vVec, velocity vector
     """
+    data = elements.to_tensor()
+    (
+        semi_major_axis,
+        eccentricity,
+        inclination,
+        right_ascension_of_the_ascending_node,
+        argument_of_perigee,
+        true_anomaly,
+    ) = data.unbind(-1)
 
-    if torch.any(
-            1.0 +
-            elements.eccentricity * torch.cos(elements.true_anomaly) < eps):
+    if torch.any(1.0 + eccentricity * torch.cos(true_anomaly) < eps):
         warnings.warn(
             'WARNING: Radius is near infinite in elem2rv conversion.')
 
     # Calculate the semilatus rectum and the radius #
-    p = elements.semi_major_axis * (
-        1.0 - elements.eccentricity * elements.eccentricity)
-    r = p / (1.0 + elements.eccentricity * torch.cos(elements.true_anomaly))
-    theta = elements.argument_of_perigee + elements.true_anomaly
-    r1 = r * (torch.cos(theta) *
-              torch.cos(elements.right_ascension_of_the_ascending_node) -
-              torch.cos(elements.inclination) * torch.sin(theta) *
-              torch.sin(elements.right_ascension_of_the_ascending_node))
-    r2 = r * (torch.cos(theta) *
-              torch.sin(elements.right_ascension_of_the_ascending_node) +
-              torch.cos(elements.inclination) * torch.sin(theta) *
-              torch.cos(elements.right_ascension_of_the_ascending_node))
-    r3 = r * (torch.sin(theta) * torch.sin(elements.inclination))
+    p = semi_major_axis * (1.0 - eccentricity * eccentricity)
+    r = p / (1.0 + eccentricity * torch.cos(true_anomaly))
+    theta = argument_of_perigee + true_anomaly
+    r1 = r * (
+        torch.cos(theta) * torch.cos(right_ascension_of_the_ascending_node) -
+        torch.cos(inclination) * torch.sin(theta) *
+        torch.sin(right_ascension_of_the_ascending_node))
+    r2 = r * (
+        torch.cos(theta) * torch.sin(right_ascension_of_the_ascending_node) +
+        torch.cos(inclination) * torch.sin(theta) *
+        torch.cos(right_ascension_of_the_ascending_node))
+    r3 = r * (torch.sin(theta) * torch.sin(inclination))
 
     if torch.any(torch.abs(p) < eps):
-        if torch.any(torch.abs(1.0 - elements.eccentricity) < eps):
+        if torch.any(torch.abs(1.0 - eccentricity) < eps):
             # Rectilinear orbit #
             raise ValueError('elem2rv does not support rectilinear orbits')
         # Parabola #
-        rp = -elements.semi_major_axis
+        rp = -semi_major_axis
         p = 2.0 * rp
 
     h = torch.sqrt(mu * p)
     v1 = -mu / h * (
-        torch.cos(elements.right_ascension_of_the_ascending_node) *
-        (elements.eccentricity * torch.sin(elements.argument_of_perigee) +
-         torch.sin(theta)) + torch.cos(elements.inclination) *
-        (elements.eccentricity * torch.cos(elements.argument_of_perigee) +
-         torch.cos(theta)) *
-        torch.sin(elements.right_ascension_of_the_ascending_node))
+        torch.cos(right_ascension_of_the_ascending_node) *
+        (eccentricity * torch.sin(argument_of_perigee) + torch.sin(theta)) +
+        torch.cos(inclination) *
+        (eccentricity * torch.cos(argument_of_perigee) + torch.cos(theta)) *
+        torch.sin(right_ascension_of_the_ascending_node))
     v2 = -mu / h * (
-        torch.sin(elements.right_ascension_of_the_ascending_node) *
-        (elements.eccentricity * torch.sin(elements.argument_of_perigee) +
-         torch.sin(theta)) - torch.cos(elements.inclination) *
-        (elements.eccentricity * torch.cos(elements.argument_of_perigee) +
-         torch.cos(theta)) *
-        torch.cos(elements.right_ascension_of_the_ascending_node))
-    v3 = mu / h * (
-        elements.eccentricity * torch.cos(elements.argument_of_perigee) +
-        torch.cos(theta)) * torch.sin(elements.inclination)
+        torch.sin(right_ascension_of_the_ascending_node) *
+        (eccentricity * torch.sin(argument_of_perigee) + torch.sin(theta)) -
+        torch.cos(inclination) *
+        (eccentricity * torch.cos(argument_of_perigee) + torch.cos(theta)) *
+        torch.cos(right_ascension_of_the_ascending_node))
+    v3 = mu / h * (eccentricity * torch.cos(argument_of_perigee) +
+                   torch.cos(theta)) * torch.sin(inclination)
 
     return torch.stack([r1, r2, r3], dim=-1), torch.stack([v1, v2, v3], dim=-1)

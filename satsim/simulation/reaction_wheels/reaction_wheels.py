@@ -41,7 +41,7 @@ class ReactionWheel:
         mass: float = 1.,
         max_momentum: float,
         max_torque: float = 0.,  # turn off
-        max_angular_velocity: float = 0.,  # turn off 
+        max_angular_velocity: float = 0.,  # turn off
         max_power_efficiency: float = -1.,  # turn off
         base_power: float = 0.,
         elec_to_mech_efficiency: float = 1.,
