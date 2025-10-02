@@ -197,30 +197,6 @@ class ReactionWheels(
         dynamic_params['angular_velocity'] = angular_acceleration
         return dynamic_params
 
-    # deserted
-    def update_energy_momentum_contributions(
-        self,
-        state_dict: ReactionWheelsStateDict,
-        integrate_time_step: float,
-        rotAngMomPntCContr_B: Tensor,
-        rotEnergyContr: Tensor,
-        angular_velocity_BN_B: Tensor,
-    ) -> tuple[Tensor, Tensor]:
-        angular_velocity = angular_velocity = state_dict['dynamic_params'][
-            'angular_velocity']
-
-        rotAngMomPntCContr_B = (self.moment_of_inertia_wrt_spin *
-                                self.spin_axis_in_body *
-                                angular_velocity).sum(dim=-1)
-        rotEnergyContr += (
-            1. / 2 * self.moment_of_inertia_wrt_spin * angular_velocity**2 +
-            self.moment_of_inertia_wrt_spin * angular_velocity * torch.matmul(
-                angular_velocity_BN_B.unsqueeze(-2),
-                self.spin_axis_in_body,
-            )).sum()  # TODO: check dim
-
-        return rotAngMomPntCContr_B, rotEnergyContr
-
     def compute_power_usage(
         self,
         battery_state_dict: BatteryStateDict,
