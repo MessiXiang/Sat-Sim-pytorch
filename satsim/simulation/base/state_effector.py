@@ -17,7 +17,7 @@ class BackSubMatrices(TypedDict):
     # its equation of motion become more simple
     moment_of_inertia_matrix: torch.Tensor
     ext_force_B_B: torch.Tensor
-    ext_torque: torch.Tensor
+    ext_torque_B_B: torch.Tensor
 
 
 class MassProps(TypedDict):

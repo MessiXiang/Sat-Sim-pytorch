@@ -168,14 +168,14 @@ class ReactionWheels(
                     ))
 
         back_substitution_contribution[
-            'ext_torque'] = back_substitution_contribution['ext_torque'] - (
-                self.spin_axis_in_body * current_torque +
-                self.moment_of_inertia_wrt_spin * angular_velocity *
-                torch.cross(
-                    angular_velocity_BN_B.unsqueeze(-1),
-                    self.spin_axis_in_body,
-                    dim=-2,
-                )).sum(-1)
+            'ext_torque_B_B'] = back_substitution_contribution[
+                'ext_torque_B_B'] - (self.spin_axis_in_body * current_torque +
+                                     self.moment_of_inertia_wrt_spin *
+                                     angular_velocity * torch.cross(
+                                         angular_velocity_BN_B.unsqueeze(-1),
+                                         self.spin_axis_in_body,
+                                         dim=-2,
+                                     )).sum(-1)
 
         return back_substitution_contribution
 

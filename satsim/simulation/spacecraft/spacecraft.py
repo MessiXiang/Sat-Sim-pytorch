@@ -56,8 +56,8 @@ class Spacecraft(
         timer: Timer,
         mass: torch.Tensor,
         moment_of_inertia_matrix_wrt_body_point: torch.Tensor,
-        position_BN_N: torch.Tensor,
-        velocity_BN_N: torch.Tensor,
+        position_BP_N: torch.Tensor,
+        velocity_BP_N: torch.Tensor,
         attitude_BN: torch.Tensor | None = None,
         angular_velocity_BN_B: torch.Tensor | None = None,
         gravity_field: GravityField | None = None,
@@ -71,8 +71,8 @@ class Spacecraft(
             mass=mass,
             moment_of_inertia_matrix_wrt_body_point=
             moment_of_inertia_matrix_wrt_body_point,
-            position_BN_N=position_BN_N,
-            velocity_BN_N=velocity_BN_N,
+            position_BP_N=position_BP_N,
+            velocity_BP_N=velocity_BP_N,
             attitude_BN=attitude_BN,
             angular_velocity_BN_B=angular_velocity_BN_B,
         )
@@ -149,23 +149,23 @@ class Spacecraft(
             'moment_of_inertia_matrix_wrt_body_point']
 
         hub_state_dict = state_dict['_hub']
-        position_BN_N = hub_state_dict['dynamic_params']['position_BN_N']
+        position_BP_N = hub_state_dict['dynamic_params']['position_BP_N']
         angular_velocity_BN_B = hub_state_dict['dynamic_params'][
             'angular_velocity_BN_B']
 
         gravity_acceleration_B_N: torch.Tensor
         if self.gravity_field is not None:
             _, (gravity_acceleration_B_N, ) = self.gravity_field(
-                position_BN_N, )
+                position_BP_N, )
         else:
-            gravity_acceleration_B_N = torch.zeros_like(position_BN_N)
+            gravity_acceleration_B_N = torch.zeros_like(position_BP_N)
 
         # calculate back substitution matrices
         back_substitution_contribution = BackSubMatrices(
             moment_of_inertia_matrix=torch.zeros_like(
                 moment_of_inertia_matrix_wrt_body_point),
-            ext_force_B_B=torch.zeros_like(position_BN_N),
-            ext_torque=torch.zeros_like(position_BN_N),
+            ext_force_B_B=torch.zeros_like(position_BP_N),
+            ext_torque_B_B=torch.zeros_like(position_BP_N),
         )
 
         # Update back substitution matrices for state effectors
@@ -182,8 +182,8 @@ class Spacecraft(
         back_substitution_contribution['moment_of_inertia_matrix'] = (
             back_substitution_contribution['moment_of_inertia_matrix'] +
             moment_of_inertia_matrix_wrt_body_point)
-        back_substitution_contribution['ext_torque'] = (
-            back_substitution_contribution['ext_torque'] + torch.cross(
+        back_substitution_contribution['ext_torque_B_B'] = (
+            back_substitution_contribution['ext_torque_B_B'] + torch.cross(
                 torch.einsum(
                     '...ij, ...j -> ...i',
                     moment_of_inertia_matrix_wrt_body_point,
@@ -368,7 +368,7 @@ class Spacecraft(
         #     state_dict,
         #     integrate_time_step=0. * self._timer.dt,
         # )
-        velocity_BN_N = state_dict['_hub']['dynamic_params']['velocity_BN_N']
+        velocity_BP_N = state_dict['_hub']['dynamic_params']['velocity_BP_N']
         attitude_BN = state_dict['_hub']['dynamic_params']['attitude_BN']
         direction_cosine_matrix_BN = mrp_to_rotation_matrix(attitude_BN)
         gravitational_velocity_BN_N = state_dict['_hub']['dynamic_params'][
@@ -378,16 +378,16 @@ class Spacecraft(
                 'accumulated_non_gravitational_velocity_change_BN_B'] + torch.einsum(
                     '...ij, ...j -> ...i',
                     direction_cosine_matrix_BN,
-                    velocity_BN_N - gravitational_velocity_BN_N,
+                    velocity_BP_N - gravitational_velocity_BN_N,
                 )
         state_dict['accumulated_non_gravitational_velocity_change_BN_N'] = (
             state_dict['accumulated_non_gravitational_velocity_change_BN_N'] +
-            (velocity_BN_N - gravitational_velocity_BN_N))
+            (velocity_BP_N - gravitational_velocity_BN_N))
 
         non_conservative_acceleration_BN_B = torch.einsum(
             '...ij, ...j -> ...i',
             direction_cosine_matrix_BN,
-            (velocity_BN_N - gravitational_velocity_BN_N),
+            (velocity_BP_N - gravitational_velocity_BN_N),
         ) / self._timer.dt
 
         angular_velocity_BN_B = state_dict['_hub']['dynamic_params'][
@@ -403,15 +403,15 @@ class Spacecraft(
         # NOTE: Here originally calculate ext_force_torque on spacecraft.
 
         # prepare output
-        position_BN_N = state_dict['_hub']['dynamic_params']['position_BN_N']
+        position_BP_N = state_dict['_hub']['dynamic_params']['position_BP_N']
         if self.gravity_field is not None:
             position_BN_N, velocity_BN_N = self.gravity_field.update_inertial_position_and_velocity(
-                position_BN_N,
-                velocity_BN_N,
+                position_BP_N,
+                velocity_BP_N,
             )
         else:
-            position_BN_N = position_BN_N
-            velocity_BN_N = velocity_BN_N
+            position_BN_N = position_BP_N
+            velocity_BN_N = velocity_BP_N
 
         return state_dict, SpacecraftStateOutput(
             position_BN_N=position_BN_N,
