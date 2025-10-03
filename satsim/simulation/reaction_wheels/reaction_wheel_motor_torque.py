@@ -10,7 +10,6 @@ class ReactionWheelMotorTorque(Module[VoidStateDict]):
         self,
         *args,
         control_axis: torch.Tensor,
-        simplified: bool = False,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -19,7 +18,6 @@ class ReactionWheelMotorTorque(Module[VoidStateDict]):
             control_axis,
             persistent=False,
         )
-        self._simplified = simplified
 
     @property
     def control_axis(self) -> torch.Tensor:
@@ -41,9 +39,6 @@ class ReactionWheelMotorTorque(Module[VoidStateDict]):
             self.control_axis,
         )  # [num_axis]
 
-        if self._simplified:
-            return state_dict, (torque_axis, )
-
         CGs = torch.einsum(
             '...ij, ...ik -> ...jk',
             self.control_axis,
@@ -64,6 +59,5 @@ class ReactionWheelMotorTorque(Module[VoidStateDict]):
             temp,
             CGs,
         ).squeeze(-2)
-        breakpoint()
 
         return state_dict, (motor_torque, )
