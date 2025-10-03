@@ -10,6 +10,7 @@ from typing import NamedTuple, NotRequired, TypedDict
 import torch
 
 from satsim.architecture import Module, Timer
+from satsim.utils import dict_recursive_apply
 from satsim.utils.matrix_support import mrp_to_rotation_matrix
 
 from ..base import BackSubMatrices, MassProps
@@ -70,10 +71,10 @@ class Spacecraft(
             mass=mass,
             moment_of_inertia_matrix_wrt_body_point=
             moment_of_inertia_matrix_wrt_body_point,
-            position=position_BN_N,
-            velocity=velocity_BN_N,
-            attitude=attitude_BN,
-            angular_velocity=angular_velocity_BN_B,
+            position_BN_N=position_BN_N,
+            velocity_BN_N=velocity_BN_N,
+            attitude_BN=attitude_BN,
+            angular_velocity_BN_B=angular_velocity_BN_B,
         )
         self._gravity_field = gravity_field
         self._reaction_wheels = reaction_wheels
@@ -163,7 +164,7 @@ class Spacecraft(
         back_substitution_contribution = BackSubMatrices(
             moment_of_inertia_matrix=torch.zeros_like(
                 moment_of_inertia_matrix_wrt_body_point),
-            ext_force=torch.zeros_like(position_BN_N),
+            ext_force_B_B=torch.zeros_like(position_BN_N),
             ext_torque=torch.zeros_like(position_BN_N),
         )
 
@@ -216,7 +217,7 @@ class Spacecraft(
             reaction_wheels_state_dot = self._reaction_wheels.compute_derivatives(
                 state_dict=reaction_wheels_state_dict,
                 integrate_time_step=integrate_time_step,
-                angular_velocity_dot=hub_state_dot['angular_velocity'],
+                angular_velocity_dot=hub_state_dot['angular_velocity_BN_B'],
             )
             states_dot['_reaction_wheels'] = reaction_wheels_state_dot
 
@@ -267,7 +268,10 @@ class Spacecraft(
 
         # get dynamic params space and save current dynamic params state
         dynamic_params = self.get_dynamic_params(state_dict)
-        previous_dynamic_params = deepcopy(dynamic_params)
+        previous_dynamic_params = dict_recursive_apply(
+            dynamic_params,
+            lambda x: x.clone(),
+        )
 
         # stage 1
         k1 = self.equation_of_motion(
@@ -353,7 +357,7 @@ class Spacecraft(
         #     hub_state_dict)
         # state_dict['_hub'] = hub_state_dict
         angular_velocity_BN_B_before = hub_state_dict['dynamic_params'][
-            'angular_velocity'].clone()
+            'angular_velocity_BN_B'].clone()
 
         ## solve next state
         state_dict = self.integrate_to_this_time(state_dict=state_dict)
@@ -364,8 +368,8 @@ class Spacecraft(
         #     state_dict,
         #     integrate_time_step=0. * self._timer.dt,
         # )
-        velocity_BN_N = state_dict['_hub']['dynamic_params']['velocity']
-        attitude_BN = state_dict['_hub']['dynamic_params']['attitude']
+        velocity_BN_N = state_dict['_hub']['dynamic_params']['velocity_BN_N']
+        attitude_BN = state_dict['_hub']['dynamic_params']['attitude_BN']
         direction_cosine_matrix_BN = mrp_to_rotation_matrix(attitude_BN)
         gravitational_velocity_BN_N = state_dict['_hub']['dynamic_params'][
             'grav_velocity']
@@ -387,7 +391,7 @@ class Spacecraft(
         ) / self._timer.dt
 
         angular_velocity_BN_B = state_dict['_hub']['dynamic_params'][
-            'angular_velocity']
+            'angular_velocity_BN_B']
         angular_acceleration = (angular_velocity_BN_B -
                                 angular_velocity_BN_B_before) / self._timer.dt
 
@@ -399,8 +403,7 @@ class Spacecraft(
         # NOTE: Here originally calculate ext_force_torque on spacecraft.
 
         # prepare output
-        position_BN_N = state_dict['_hub']['dynamic_params']['position']
-        velocity_BN_N = state_dict['_hub']['dynamic_params']['velocity']
+        position_BN_N = state_dict['_hub']['dynamic_params']['position_BN_N']
         if self.gravity_field is not None:
             position_BN_N, velocity_BN_N = self.gravity_field.update_inertial_position_and_velocity(
                 position_BN_N,

@@ -157,7 +157,6 @@ class HubEffector(
     def normalize_attitude(
         self,
         state_dict: HubEffectorStateDict,
-        integrate_time_step: float,
     ) -> HubEffectorStateDict:
         altitude_BN = state_dict['dynamic_params']['attitude_BN']
         altitude_BN_norm = altitude_BN.norm(dim=-1, keepdim=True)
