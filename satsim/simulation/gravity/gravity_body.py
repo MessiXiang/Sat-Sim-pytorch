@@ -56,11 +56,11 @@ class GravityBody(Module[VoidStateDict], ABC):
     ) -> Tensor:
         """
         Computes the gravitational field for a set of point masses at specified positions.
-        
+
         Args:
             position (Tensor): Position tensor with shape [batch_size, num_positions, 3],
                 representing the 3D position vectors of points relative to each planet.
-        
+
         Returns:
             Tensor: Gravitational field tensor with shape [batch_size, num_positions, 3],
                 representing the total gravitational field at each position due to all planets.
@@ -72,7 +72,7 @@ class GravityBody(Module[VoidStateDict], ABC):
         return cls(
             name='SUN',
             gm=constants.MU_SUN * 1e9,
-            equatorial_radius=constants.REQ_SUN,
+            equatorial_radius=constants.REQ_SUN * 1e3,
             **kwargs,
         )
 
@@ -81,7 +81,7 @@ class GravityBody(Module[VoidStateDict], ABC):
         return cls(
             name='EARTH',
             gm=constants.MU_EARTH * 1e9,
-            equatorial_radius=constants.REQ_EARTH,
+            equatorial_radius=constants.REQ_EARTH * 1e3,
             **kwargs,
         )
 

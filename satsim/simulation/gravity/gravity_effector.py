@@ -109,7 +109,7 @@ class GravityField(Module[VoidStateDict]):
         position_CN_N = self._position_CN_N.unsqueeze(-2)
         position_BC_N = \
             (position_BN_N - \
-        position_CN_N).transpose(-2,-3)  # [b, num_spacecraft, num_planet, 3]
+        position_CN_N).transpose(-2,-3)  # [num_spacecraft, num_planet, 3]
 
         # Subtract acceleration of central body due to other bodies to
         # get relative acceleration of spacecraft. See Vallado on
@@ -130,11 +130,8 @@ class GravityField(Module[VoidStateDict]):
 
                 accelerations_PcC_N.append(acceleration_PcC_N)
 
-            position_BC_N = \
-                position_BC_N[
-                ..., idx, :]
             acceleration_BC_N = gravity_body.compute_gravitational_acceleration(
-                relative_position=position_BC_N)
+                relative_position=position_BC_N[..., idx, :])
             accelerations_BC_N.append(acceleration_BC_N)
 
         if len(accelerations_PcC_N) > 0:
