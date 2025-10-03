@@ -189,10 +189,11 @@ class ReactionWheels(
         current_torque = state_dict['current_torque']
 
         angular_acceleration = (
-            current_torque / self.moment_of_inertia_wrt_spin - torch.matmul(
-                angular_velocity_dot.unsqueeze(-2),
+            current_torque / self.moment_of_inertia_wrt_spin - torch.einsum(
+                '...i,...ij-> ...j',
+                angular_velocity_dot,
                 self.spin_axis_in_body,
-            ))
+            ).unsqueeze(-2))
 
         dynamic_params['angular_velocity'] = angular_acceleration
         return dynamic_params

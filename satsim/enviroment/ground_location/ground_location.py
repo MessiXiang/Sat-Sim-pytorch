@@ -284,10 +284,11 @@ class GroundLocation(Module[GroundLocationStateDict]):
         position_PN_N = planet_state['position_CN_N']
 
         # Transform position to inertial frame
-        position_LP_N = torch.matmul(
-            direction_cosine_matrix_CN.transpose(-1, -2),
-            position_LP_P.unsqueeze(-1),
-        ).squeeze(-1)
+        position_LP_N = torch.einsum(
+            '...ij, ...i-> ...j',
+            direction_cosine_matrix_CN,
+            position_LP_P,
+        )
         position_LP_N_unit = position_LP_N / torch.norm(position_LP_N)
         position_LN_N = position_PN_N + position_LP_N
 

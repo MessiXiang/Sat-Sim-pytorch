@@ -10,6 +10,7 @@ class ReactionWheelMotorTorque(Module[VoidStateDict]):
         self,
         *args,
         control_axis: torch.Tensor,
+        simplified: bool = False,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -18,6 +19,7 @@ class ReactionWheelMotorTorque(Module[VoidStateDict]):
             control_axis,
             persistent=False,
         )
+        self._simplified = simplified
 
     @property
     def control_axis(self) -> torch.Tensor:
@@ -32,26 +34,36 @@ class ReactionWheelMotorTorque(Module[VoidStateDict]):
         reaction_wheel_spin_axis_in_body: torch.Tensor,
         **kwargs,
     ) -> tuple[VoidStateDict, tuple[torch.Tensor]]:
-        num_axis = self.control_axis.size(-1)
-        num_reaction_wheels = reaction_wheel_spin_axis_in_body.size(-1)
-        # assert num_reaction_wheels == num_axis <= 3
-
         torque_request_body = -torque_request_body  # [3]
-
-        torque_axis = torch.matmul(
-            torque_request_body.unsqueeze(-2),
+        torque_axis = torch.einsum(
+            '...i, ... ij-> ...j',
+            torque_request_body,
             self.control_axis,
-        ).squeeze(-2)  # [num_axis]
-        CGs = torch.matmul(
-            self.control_axis.transpose(-1, -2),
+        )  # [num_axis]
+
+        if self._simplified:
+            return state_dict, (torque_axis, )
+
+        CGs = torch.einsum(
+            '...ij, ...ik -> ...jk',
+            self.control_axis,
             reaction_wheel_spin_axis_in_body,
         )  # [num_axis, num_reaction_wheels]
 
         # TODO: gradiant may be broken here
-        m33 = torch.matmul(CGs, CGs.transpose(-1, -2))  # [num_axis, num_axis]
-        temp = torch.linalg.solve(m33, torque_axis.unsqueeze(-1)).transpose(
-            -1, -2)  # [1, num_axis]
+        m33 = torch.einsum(
+            '...ij, ...kj-> ...ik',
+            CGs,
+            CGs,
+        )  # [num_axis, num_axis]
+        temp: torch.Tensor = torch.linalg.solve(
+            m33, torque_axis.unsqueeze(-1)).transpose(-1, -2)  # [1, num_axis]
 
-        motor_torque = torch.matmul(temp, CGs).squeeze(-2)
+        motor_torque = torch.einsum(
+            '...ij, ...jk-> ...ik',
+            temp,
+            CGs,
+        ).squeeze(-2)
+        breakpoint()
 
         return state_dict, (motor_torque, )
