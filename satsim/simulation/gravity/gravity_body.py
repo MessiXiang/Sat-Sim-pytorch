@@ -111,9 +111,6 @@ class PointMassGravityBody(GravityBody):
         """
 
         r = torch.norm(relative_position, dim=-1, keepdim=True)
-
-        force_magnitude = -self._gm / (r**3)  # [b, num_position, 1]
+        force_magnitude = -self._gm / (r**3)  # [num_position, 1]
         grav_field = force_magnitude * relative_position
-        if grav_field.dim() > 1:
-            grav_field = grav_field.sum(-2)
         return grav_field
