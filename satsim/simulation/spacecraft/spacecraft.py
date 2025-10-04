@@ -5,7 +5,7 @@ __all__ = [
     'DynamicParamsDict',
 ]
 from copy import deepcopy
-from typing import NamedTuple, NotRequired, TypedDict
+from typing import Literal, NamedTuple, NotRequired, TypedDict
 
 import torch
 
@@ -57,6 +57,7 @@ class Spacecraft(
         angular_velocity_BN_B: torch.Tensor | None = None,
         gravity_field: GravityField | None = None,
         reaction_wheels: ReactionWheels | None = None,
+        integrate_method: Literal['RK', 'Euler'] = 'RK',
         **kwargs,
     ) -> None:
         super().__init__(*args, timer=timer, **kwargs)
@@ -73,6 +74,7 @@ class Spacecraft(
         )
         self._gravity_field = gravity_field
         self._reaction_wheels = reaction_wheels
+        self._integrate_method = integrate_method
 
     @property
     def gravity_field(self) -> GravityField | None:
@@ -273,6 +275,21 @@ class Spacecraft(
             state_dict=state_dict,
             integrate_time_step=-1. * self._timer.dt,
         )
+
+        if self._integrate_method == 'Euler':
+            for module_name, module_dynamic_params in dynamic_params.items():
+                module_dynamic_params_dot = k1[module_name]
+                module_previous_dynamic_state = previous_dynamic_params[
+                    module_name]
+                for state_name in module_dynamic_params.keys():
+                    module_dynamic_params[state_name] = (
+                        module_previous_dynamic_state[state_name] +
+                        self._timer.dt * module_dynamic_params_dot[state_name])
+                state_dict = self.apply_dynamic_params(
+                    state_dict,
+                    dynamic_params,
+                )
+            return state_dict
 
         # stage 2
         for module_name, module_dynamic_params in dynamic_params.items():
