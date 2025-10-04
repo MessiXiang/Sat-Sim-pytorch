@@ -158,15 +158,17 @@ class HubEffector(
         self,
         state_dict: HubEffectorStateDict,
     ) -> HubEffectorStateDict:
-        altitude_BN = state_dict['dynamic_params']['attitude_BN']
-        altitude_BN_norm = altitude_BN.norm(dim=-1, keepdim=True)
-        normalize_mask = altitude_BN_norm > 1
-        altitude_BN = torch.where(
-            normalize_mask,
-            -altitude_BN / altitude_BN_norm,
-            altitude_BN,
-        )
-        state_dict['dynamic_params']['attitude_BN'] = altitude_BN
+        attitude_BN = state_dict['dynamic_params']['attitude_BN']
+        attitude_BN_norm = attitude_BN.norm(dim=-1, keepdim=True)
+        normalize_mask = attitude_BN_norm > 1
+        if torch.any(normalize_mask):
+            attitude_BN = torch.where(
+                normalize_mask,
+                -attitude_BN /
+                (attitude_BN * attitude_BN).sum(-1, keepdim=True),
+                attitude_BN,
+            )
+        state_dict['dynamic_params']['attitude_BN'] = attitude_BN
 
         return state_dict
 
