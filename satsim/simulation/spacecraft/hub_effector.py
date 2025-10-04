@@ -18,7 +18,6 @@ class HubEffectorDynamicParams(TypedDict):
     velocity_BP_N: torch.Tensor  # [3]
     attitude_BN: torch.Tensor  # [3]
     angular_velocity_BN_B: torch.Tensor  # [3]
-    grav_velocity: torch.Tensor  # [3]
 
 
 HubEffectorStateDict = StateEffectorStateDict[HubEffectorDynamicParams]
@@ -81,7 +80,6 @@ class HubEffector(
             velocity_BP_N=self._velocity_BP_N_init.clone(),
             attitude_BN=self._attitude_BN_init.clone(),
             angular_velocity_BN_B=self._angular_velocity_BN_B_init.clone(),
-            grav_velocity=self._velocity_BP_N_init.clone(),
         )
         state_dict.update(dynamic_params=dynamic_params, mass_props=mass_props)
 
@@ -143,7 +141,6 @@ class HubEffector(
             direction_cosine_matrix_BN,
             (ext_force_B_B / spacecraft_mass.unsqueeze(-1)),
         ) + gravity_acceleration
-        grav_velocity_dot = gravity_acceleration
         position_dot = velocity_BP_N.clone()
 
         return HubEffectorDynamicParams(
@@ -151,7 +148,6 @@ class HubEffector(
             velocity_BP_N=velocity_dot.squeeze(-1),
             attitude_BN=attitude_dot,
             angular_velocity_BN_B=angular_velocity_dot.squeeze(-1),
-            grav_velocity=grav_velocity_dot,
         )
 
     def normalize_attitude(
@@ -169,16 +165,5 @@ class HubEffector(
                 attitude_BN,
             )
         state_dict['dynamic_params']['attitude_BN'] = attitude_BN
-
-        return state_dict
-
-    def match_gravity_to_velocity_state(
-        self,
-        state_dict: HubEffectorStateDict,
-    ) -> HubEffectorStateDict:
-        dynamic_params = state_dict['dynamic_params']
-
-        dynamic_params['grav_velocity'] = dynamic_params[
-            'velocity_BP_N'].clone()
 
         return state_dict
