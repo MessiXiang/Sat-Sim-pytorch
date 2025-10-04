@@ -4,14 +4,12 @@ __all__ = [
     'SpacecraftStateOutput',
     'DynamicParamsDict',
 ]
-from copy import deepcopy
 from typing import Literal, NamedTuple, NotRequired, TypedDict
 
 import torch
 
 from satsim.architecture import Module, Timer
-from satsim.utils import dict_recursive_apply
-from satsim.utils.matrix_support import mrp_to_rotation_matrix
+from satsim.utils import make_dict_copy
 
 from ..base import BackSubMatrices, MassProps
 from ..gravity import GravityField
@@ -265,10 +263,7 @@ class Spacecraft(
 
         # get dynamic params space and save current dynamic params state
         dynamic_params = self.get_dynamic_params(state_dict)
-        previous_dynamic_params = dict_recursive_apply(
-            dynamic_params,
-            lambda x: x.clone(),
-        )
+        previous_dynamic_params = make_dict_copy(dynamic_params)
 
         # stage 1
         k1 = self.equation_of_motion(
