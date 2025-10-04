@@ -122,10 +122,9 @@ class SpiceInterface(Module[SpiceInterfaceStateDict]):
             direction_cosine_matrices_CN.append(direction_cosine_matrix_CN)
             direction_cosine_matrices_CN_dot.append(
                 direction_cosine_matrix_CN_dot)
-
         return SpiceInterfaceStateDict(), (Ephemeris(
-            position_CN_N=torch.stack(positions_CN_N, dim=-2),
-            velocity_CN_N=torch.stack(velocities_CN_N, dim=-2),
+            position_CN_N=torch.stack(positions_CN_N, dim=-2) * 1e3,
+            velocity_CN_N=torch.stack(velocities_CN_N, dim=-2) * 1e3,
             direction_cosine_matrix_CN=torch.stack(
                 direction_cosine_matrices_CN, dim=-3),
             direction_cosine_matrix_CN_dot=torch.stack(

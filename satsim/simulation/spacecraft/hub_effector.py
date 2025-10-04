@@ -31,8 +31,7 @@ class HubEffector(
         self,
         *args,
         mass: torch.Tensor,
-        moment_of_inertia_matrix_wrt_body_point: torch.
-        Tensor,  # TODO：double-check
+        moment_of_inertia_matrix_wrt_body_point: torch.Tensor,
         position_BP_N: torch.Tensor,
         velocity_BP_N: torch.Tensor,
         attitude_BN: torch.Tensor | None = None,

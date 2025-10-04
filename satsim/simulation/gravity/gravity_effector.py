@@ -121,9 +121,10 @@ class GravityField(Module[VoidStateDict]):
                 f'_gravity_body_{gravity_body_name}')
             if (self._central_body_name is not None
                     and self._central_body_name != gravity_body_name):
-                position_CPc_N = \
-                    self._position_CN_N[...,idx,:] \
-                    - self._position_CN_N[...,self._central_gravity_body_idx,:]
+                position_CPc_N = (
+                    self._position_CN_N[..., idx, :] -
+                    self._position_CN_N[...,
+                                        self._central_gravity_body_idx, :])
 
                 acceleration_PcC_N = gravity_body.compute_gravitational_acceleration(
                     relative_position=position_CPc_N)
