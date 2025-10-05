@@ -10,6 +10,8 @@ build/
 *.tpc
 *.tls
 *.bsp
+*.txt
 *.json
 *.png
 *.pth
+sat_config/

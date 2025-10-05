@@ -81,6 +81,7 @@ if __name__ == '__main__':
     parser.add_argument('--constellation', type=str)
     parser.add_argument('--tasksets', type=str)
     parser.add_argument('--state-dict', type=str, default=None)
+    parser.add_argument('--integrate', type=str, default='RK')
     parser.add_argument('--use-battery', action='store_true', default=False)
     parser.add_argument(
         '--use-gpu',
@@ -100,9 +101,12 @@ if __name__ == '__main__':
     config = make_constellation_config(config)
 
     timer = Timer(1.)
-    simulator = RemoteSensingConstellation(timer=timer,
-                                           config=config,
-                                           use_battery=args.use_battery)
+    simulator = RemoteSensingConstellation(
+        timer=timer,
+        config=config,
+        use_battery=args.use_battery,
+        integrate_method=args.integrate,
+    )
     if args.state_dict is not None:
         simulator_state_dict = torch.load(args.state_dict)
     else:
@@ -136,40 +140,107 @@ if __name__ == '__main__':
     angle_error: torch.Tensor
     battery_percentage: torch.Tensor
     angle_errors = []
-    battery = []
+    position_BN_N_norm = []
+    velocity_BN_N_norm = []
+    angular_velocity = []
+    angular_acc = []
+    command_torque = []
     while timer.time < args.time:
         simulator_state_dict, (
             angle_error,
             mapping_access_state,
+            spacecraft_output,
+            position_LB_B_unit,
             battery_percentage,
         ) = simulator(state_dict=simulator_state_dict)
+
         timer.step()
         p_bar.update(1)
+
         angle_errors.append(angle_error.cpu())
-        battery.append(battery_percentage.cpu())
+        position_BN_N_norm.append(
+            spacecraft_output.position_BN_N.norm(dim=-1).cpu())
+        velocity_BN_N_norm.append(
+            spacecraft_output.velocity_BN_N.norm(dim=-1).cpu())
+        angular_velocity.append(
+            simulator_state_dict['_spacecraft']['_hub']['dynamic_params']
+            ['angular_velocity_BN_B'].norm(dim=-1).cpu())
+        angular_acc.append(
+            spacecraft_output.angular_acceleration_BN_B.norm(dim=-1).cpu())
+        command_torque.append(simulator_state_dict['_spacecraft']
+                              ['_reaction_wheels']['current_torque'])
+
     p_bar.close()
 
     angle_errors_list = torch.stack(angle_errors, dim=-1).tolist()
-    battery = torch.stack(battery, dim=-1).tolist()
+    distance_list = torch.stack(
+        position_BN_N_norm,
+        dim=-1,
+    ).tolist()
+    velocity_list = torch.stack(
+        velocity_BN_N_norm,
+        dim=-1,
+    ).tolist()
+    angular_velocity_list = torch.stack(
+        angular_velocity,
+        dim=-1,
+    ).tolist()
+    angular_acc_list = torch.stack(
+        angular_acc,
+        dim=-1,
+    ).tolist()
+    cmd_list = torch.stack(command_torque, dim=-1).squeeze().tolist()
 
     if args.grad:
         torch.stack(angle_errors, dim=-1).sum().backward()
         print(grad_record.grad)
 
+    for c in cmd_list:
+        plt.plot(c)
+    plt.xlabel('Timestep')
+    plt.ylabel('command torque')
+    plt.title('torque over Time')
+    plt.savefig('torque.png')
+
+    plt.clf()
     # print(min(angle_errors))
     for angle_error in angle_errors_list:
-
         plt.plot(angle_error)
     plt.xlabel('Timestep')
     plt.ylabel('Angle Error (rad)')
     plt.title('Angle Error over Time')
-
     plt.savefig('angle_error.png')
 
-    # for b in battery:
-    #     plt.plot(b)
-    # plt.xlabel('Timestep')
-    # plt.ylabel('Battery Percentage %')
-    # plt.title('Percentage overtime')
-    # p_bar.close()
-    # plt.savefig('battery.png')
+    plt.clf()
+    for o in angular_velocity_list:
+        plt.plot(o)
+    plt.xlabel('Timestep')
+    plt.ylabel('omega (rad/s)')
+    plt.title('omega over time')
+    plt.savefig('omega.png')
+
+    plt.clf()
+    for o in angular_acc_list:
+        plt.plot(o)
+    plt.xlabel('Timestep')
+    plt.ylabel('omega_dot (rad/s^2)')
+    plt.title('omega_dot over time')
+    plt.savefig('omega_dot.png')
+
+    plt.clf()
+    for d in distance_list:
+
+        plt.plot(d)
+    plt.xlabel('Timestep')
+    plt.ylabel('distance (m)')
+    plt.title('distance over time')
+    plt.savefig('distance.png')
+
+    plt.clf()
+    for v in velocity_list:
+        plt.plot(v)
+    plt.xlabel('Timestep')
+    plt.ylabel('velocity (m/s)')
+    plt.title('velocity over time')
+
+    plt.savefig('velocity.png')

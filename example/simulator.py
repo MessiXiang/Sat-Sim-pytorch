@@ -92,6 +92,7 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
         *args,
         config: ConstellationConfig,
         use_battery: bool = True,
+        integrate_method: str = 'RK',
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -102,10 +103,8 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
         reaction_wheels = self._setup_reaction_wheels(config['reaction_wheel'])
 
         orbits = OrbitalElements.from_dicts(config['orbits'])
-        r, v = elem2rv(constants.MU_EARTH, elements=orbits)
-
+        r, v = elem2rv(constants.MU_EARTH * 1e9, elements=orbits)
         inertias = torch.tensor(config['inertia']).view(self._n, 3, 3)
-
         self._spacecraft = Spacecraft(
             timer=self._timer,
             mass=torch.tensor(config['mass']),
@@ -115,6 +114,7 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
             angular_velocity_BN_B=torch.zeros(self._n, 3),
             gravity_field=self._gravity_field,
             reaction_wheels=reaction_wheels,
+            integrate_method=integrate_method,
         )
 
         self._solar_panel = SimpleSolarPanel(
@@ -162,10 +162,10 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
             integral_limit=torch.tensor(
                 config['mrp_control']['integral_limit']),
         )
-        self._reaction_wheel_motor_torque = ReactionWheelMotorTorque(
-            timer=self._timer,
-            control_axis=torch.eye(3).expand(self._n, 3, 3),
-        )
+        # self._reaction_wheel_motor_torque = ReactionWheelMotorTorque(
+        #     timer=self._timer,
+        #     control_axis=torch.eye(3).expand(self._n, 3, 3),
+        # )
 
     @property
     def num_satellite(self) -> int:
@@ -340,13 +340,11 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
             position_BN_N=spacecraft_state_output.position_BN_N,
             attitude_BN=attitude_BN,
             angular_velocity_BN_B=angular_velocity_BN_B,
-            **kwargs,
         )
         state_dict['_pointing_guide'] = pointing_guide_state_dict
 
         reaction_wheels_state_dict = state_dict['_spacecraft'][
             '_reaction_wheels']
-
         mrp_control_state_dict = state_dict['_mrp_control']
         mrp_control_state_dict, attitude_control_torque = self._mrp_control(
             state_dict=mrp_control_state_dict,
@@ -365,8 +363,7 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
         )
         state_dict['_mrp_control'] = mrp_control_state_dict
 
-        attitude_control_torque = attitude_control_torque[0]
-        breakpoint()
+        attitude_control_torque = -attitude_control_torque[0]
         # reaction_wheels_motor_torque_state_dict = state_dict[
         #     '_reaction_wheel_motor_torque']
         # reaction_wheels_motor_torque_state_dict, (
@@ -407,9 +404,13 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
         angle_error = torch.acos(dum1)
         if torch.isnan(angle_error).any():
             breakpoint()
+        # if self._timer.time >= 137.5:
+        #     breakpoint()
         return state_dict, (
             angle_error,
             mapping_access_state,
+            spacecraft_state_output,
+            position_LB_B_unit,
             battery_state_dict['stored_charge_percentage'],
         )
 
