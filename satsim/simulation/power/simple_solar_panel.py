@@ -26,11 +26,11 @@ class SimpleSolarPanel(Module[SimpleSolarPanelStateDict], PowerNodeMixin):
         """
         Initializes the SimpleSolarPanel object with the given parameters.
         Args:
-            panel_normal_B (torch.Tensor): A tensor representing the normal vector 
+            panel_normal_B (torch.Tensor): A tensor representing the normal vector
                 of the solar panel in the body frame. Must be a non-zero vector.
-            panel_area (torch.Tensor): A tensor representing the area of the solar panel. 
+            panel_area (torch.Tensor): A tensor representing the area of the solar panel.
                 Must be a positive value, in m^2.
-            panel_efficiency (torch.Tensor): A tensor representing the efficiency of the 
+            panel_efficiency (torch.Tensor): A tensor representing the efficiency of the
                 solar panel. Must be within the range (0, 1].
         Raises:
             ValueError: If `panel_area` is not a positive value.
@@ -131,10 +131,9 @@ class SimpleSolarPanel(Module[SimpleSolarPanelStateDict], PowerNodeMixin):
         position_SB_N_norm = torch.norm(
             position_SB_N,
             dim=-1,
-            keepdim=True,
         )
-        position_SB_N_norm_factor = (constants.ASTRONOMICAL_UNIT**2) / (
-            position_SB_N_norm.squeeze(-1)**2 + 1e-10)
+        position_SB_N_norm_factor = (constants.ASTRONOMICAL_UNIT**
+                                     2) / (position_SB_N_norm**2 + 1e-10)
 
         sun_power_factor = (constants.SOLAR_FLUX_AT_EARTH *
                             position_SB_N_norm_factor * shadow_factor)

@@ -2,6 +2,7 @@
 requires = [
     "setuptools",
     "torch",
+    "spiceypy",
 ]
 build-backend = "setuptools.build_meta"
 

@@ -139,6 +139,7 @@ if __name__ == '__main__':
     access_state: AccessState
     angle_error: torch.Tensor
     battery_percentage: torch.Tensor
+    battery = []
     angle_errors = []
     position_BN_N_norm = []
     velocity_BN_N_norm = []
@@ -156,7 +157,7 @@ if __name__ == '__main__':
 
         timer.step()
         p_bar.update(1)
-
+        battery.append(battery_percentage.cpu())
         angle_errors.append(angle_error.cpu())
         position_BN_N_norm.append(
             spacecraft_output.position_BN_N.norm(dim=-1).cpu())
@@ -190,6 +191,7 @@ if __name__ == '__main__':
         dim=-1,
     ).tolist()
     cmd_list = torch.stack(command_torque, dim=-1).squeeze().tolist()
+    battery_list = torch.stack(battery, dim=-1).tolist()
 
     if args.grad:
         torch.stack(angle_errors, dim=-1).sum().backward()
@@ -203,7 +205,14 @@ if __name__ == '__main__':
     plt.savefig('torque.png')
 
     plt.clf()
-    # print(min(angle_errors))
+    for b in battery_list:
+        plt.plot(b)
+    plt.xlabel('Timestep')
+    plt.ylabel('battery percentage (%)')
+    plt.title('battery percentage over Time')
+    plt.savefig('battery_percentage.png')
+
+    plt.clf()
     for angle_error in angle_errors_list:
         plt.plot(angle_error)
     plt.xlabel('Timestep')
@@ -242,5 +251,4 @@ if __name__ == '__main__':
     plt.xlabel('Timestep')
     plt.ylabel('velocity (m/s)')
     plt.title('velocity over time')
-
     plt.savefig('velocity.png')

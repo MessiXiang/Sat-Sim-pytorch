@@ -287,6 +287,7 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
         battery_state_dict = state_dict['_battery']
         solar_panel_state_dict = state_dict['_solar_panel']
 
+        breakpoint()
         battery_state_dict: BatteryStateDict
         solar_panel_state_dict, (_, battery_state_dict) = self._solar_panel(
             solar_panel_state_dict,
@@ -373,7 +374,6 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
         #         reaction_wheel_spin_axis_in_body=self.reaction_wheels.
         #         spin_axis_in_body,
         #     )
-
         reaction_wheels_state_dict, (
             battery_state_dict, ) = self.reaction_wheels(
                 state_dict=reaction_wheels_state_dict,
@@ -382,6 +382,7 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
             )
         state_dict['_spacecraft'][
             '_reaction_wheels'] = reaction_wheels_state_dict
+        breakpoint()
 
         battery_state_dict, _ = self._battery(state_dict=battery_state_dict)
         state_dict['_battery'] = battery_state_dict
