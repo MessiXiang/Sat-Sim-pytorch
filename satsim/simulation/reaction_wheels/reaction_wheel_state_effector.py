@@ -117,6 +117,10 @@ class ReactionWheels(
         return self.get_buffer('_max_torque')
 
     @property
+    def min_torque(self) -> Tensor:
+        return self.max_torque / 100
+
+    @property
     def mass(self) -> Tensor:
         return self.get_buffer('_mass')
 
@@ -210,6 +214,7 @@ class ReactionWheels(
         is_accel_mode = (self.mech_to_elec_efficiency < 0) | (
             wheel_power > 0)  # shape (batch_size, 1, num_reaction_wheels)
 
+        turn_on_mask = current_torque.abs() >= self.min_torque
         accel_power = self.base_power + torch.abs(
             wheel_power
         ) / self.elec_to_mech_efficiency  # shape (batch_size, 1, num_reaction_wheels)
@@ -219,7 +224,9 @@ class ReactionWheels(
             is_accel_mode,
             accel_power,
             regen_power,
-        ).sum(-1).squeeze(-1)  # shape (n_s)
+        )
+        total_power = (turn_on_mask * total_power).sum(-1).squeeze(
+            -1)  # shape (n_s)
 
         power_status, battery_state_dict = self.update_power_status(
             -total_power,
@@ -227,7 +234,7 @@ class ReactionWheels(
         )
 
         state_dict['current_torque'] = torch.where(
-            power_status.unsqueeze(-1).unsqueeze(-1),
+            power_status.unsqueeze(-1).unsqueeze(-1) & turn_on_mask,
             current_torque,
             0.,
         )
