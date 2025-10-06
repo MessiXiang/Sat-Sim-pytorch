@@ -100,12 +100,10 @@ class MRPFeedback(Module[MRPFeedbackStateDict]):
     ]:
         integral_sigma = state_dict['integral_sigma']
 
-        dt = 0. if self._timer.time <= self._timer.dt else self._timer.dt
-
         omega_BN_B = omega_BR_B + omega_RN_B
 
         integral_sigma = (integral_sigma +
-                          self.k.unsqueeze(-1) * dt * sigma_BR)
+                          self.k.unsqueeze(-1) * self._timer.dt * sigma_BR)
 
         integral_limit = self.integral_limit.unsqueeze(-1)
         clamp_mask = (torch.abs(integral_sigma) > integral_limit)
