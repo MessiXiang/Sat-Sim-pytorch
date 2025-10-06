@@ -27,7 +27,6 @@ class OrbitalElement:
 
     Refer to https://en.wikipedia.org/wiki/Orbital_
     """
-    id_: int
     semi_major_axis: float
     eccentricity: float
     inclination: float
@@ -37,30 +36,28 @@ class OrbitalElement:
 
     def to_dict(self) -> OrbitDict:
         d = dataclasses.asdict(self)
-        d['id'] = d.pop('id_')
         return cast(OrbitDict, d)
 
     @classmethod
     def from_dict(cls, orbit: OrbitDict) -> Self:
         d = cast(dict[str, Any], orbit.copy())
-        d['id_'] = d.pop('id')
         return cls(**d)
 
     @property
     def data(self) -> list[float]:
-        _, *data = dataclasses.astuple(self)
+        data = dataclasses.astuple(self)
         return cast(list[float], data)
 
     @classmethod
-    def sample(cls, id_: int) -> Self:
+    def sample(cls) -> Self:
 
         return cls(
-            id_,
-            round(random.uniform(0, 0.005), 6),
             round(random.uniform(6.8e6, 8e6), 1),
-            round(random.uniform(0, 180), 1),
-            round(random.uniform(0, 360), 1),
-            round(random.uniform(0, 360), 1),
+            round(random.uniform(0, 0.005), 6),
+            round(random.uniform(0, torch.pi), 1),
+            round(random.uniform(0, 2 * torch.pi), 1),
+            round(random.uniform(0, 2 * torch.pi), 1),
+            round(random.uniform(0, 2 * torch.pi), 1),
         )
 
 
