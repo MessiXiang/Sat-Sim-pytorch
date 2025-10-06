@@ -3,6 +3,7 @@ __all__ = [
     'SpacecraftStateDict',
     'SpacecraftStateOutput',
     'DynamicParamsDict',
+    'IntegrateMethod',
 ]
 from typing import Literal, NamedTuple, NotRequired, TypedDict
 
@@ -18,6 +19,7 @@ from ..reaction_wheels import (ReactionWheels, ReactionWheelsDynamicParams,
 from .hub_effector import (HubEffector, HubEffectorDynamicParams,
                            HubEffectorStateDict)
 
+IntegrateMethod = Literal['RK', 'Euler']
 
 class SpacecraftStateOutput(NamedTuple):
     position_BN_N: torch.Tensor
