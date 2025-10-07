@@ -71,7 +71,7 @@ class OrbitalElements(UserList[OrbitalElement]):
         return [element.to_dict() for element in self]
 
     def sample(cls, n: int) -> Self:
-        return cls([OrbitalElement.sample(i) for i in range(n)])
+        return cls([OrbitalElement.sample() for i in range(n)])
 
     def to_tensor(self) -> torch.Tensor:
         data = torch.tensor([element.data for element in self])

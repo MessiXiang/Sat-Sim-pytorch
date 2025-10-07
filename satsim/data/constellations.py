@@ -1,199 +1,114 @@
 __all__ = [
-    'Inertia',
-    'SolarPanelDict',
-    'SolarPanel',
-    'SensorType',
-    'SensorDict',
-    'Sensor',
-    'BatteryDict',
-    'Battery',
-    'ReactionWheelDict',
-    'ReactionWheelDicts',
-    'ReactionWheel',
-    'ReactionWheels',
-    'MRPControlDict',
-    'MRPControl',
-    'SatelliteDict',
-    'Satellite',
+    "ReactionWheelConfig",
+    "ReactionWheelConfigGroup",
+    "ReactionWheel",
+    "ReactionWheelGroup",
+    "ReactionWheelGroups",
+    "Direction",
+    "SensorConfig",
+    "Sensor",
+    "MRPControlConfig",
+    "MRPControl",
+    "SolarPanelConfig",
+    "SolarPanel",
+    "BatteryConfig",
+    "Battery",
+    "InertiaTuple",
+    "ConstellationConfig",
+    "Constellation",
 ]
 
 import dataclasses
-import math
-import random
-from enum import IntEnum, auto
-from typing import Any, TypedDict, cast
-from typing_extensions import Self
+from collections import UserList
+from typing import Iterable, TypedDict
 
 import torch
-
-from ..simulation.reaction_wheels.reaction_wheels import SpinAxis
-
-from .orbits import OrbitalElements
-
-# TODO: rename properties
-
-# yapf: disable
-Inertia = tuple[  # kg/m^2
-    float, float, float,
-    float, float, float,
-    float, float, float,
-]
-# yapf: enable
+from attr import asdict, dataclass
+from typing_extensions import Self
 
 
-class SolarPanelDict(TypedDict):
-    direction: tuple[float, float, float]
-    area: float
+class ReactionWheelConfig(TypedDict):
     efficiency: float
-
-
-@dataclasses.dataclass(frozen=True)
-class SolarPanel:
-    # unit normal vector in the body frame
-    direction: tuple[float, float, float]
-    area: float  # square meters
-    efficiency: float  # [0., 1.]
-
-    def to_dict(self) -> SolarPanelDict:
-        solar_panel = dataclasses.asdict(self)
-        return cast(SolarPanelDict, solar_panel)
-
-    @property
-    def data(self) -> list[float]:
-        direction, *data = dataclasses.astuple(self)
-        return [*direction, *data]
-
-    @classmethod
-    def sample(cls) -> Self:
-        phi = random.uniform(0, 1) * math.pi
-        theta = random.uniform(-0.5, 0.5) * math.pi
-        return cls(
-            (
-                math.cos(theta) * math.cos(phi),
-                math.cos(theta) * math.sin(phi),
-                math.sin(theta),
-            ),
-            random.uniform(0.1, 0.5),
-            random.uniform(0.1, 0.5),
-        )
-
-
-class SensorType(IntEnum):
-    VISIBLE = auto()
-    NEAR_INFRARED = auto()
-
-
-class SensorDict(TypedDict):
-    type: SensorType
-    enabled: bool
-    half_field_of_view: float
     power: float
-
-
-@dataclasses.dataclass(frozen=True)
-class Sensor:
-    type_: SensorType
-    enabled: bool
-    half_field_of_view: float  # degrees
-    power: float  # watts
-
-    def to_dict(self) -> SensorDict:
-        d = dataclasses.asdict(self)
-        d['type'] = d.pop('type_')
-        return cast(SensorDict, d)
-
-    @classmethod
-    def from_dict(cls, sensor: SensorDict) -> Self:
-        d = cast(dict[str, Any], sensor.copy())
-        d['type_'] = SensorType(d.pop('type'))
-        return cls(**d)
-
-    @property
-    def data(self) -> list[float]:
-        return [self.half_field_of_view, self.power]
-
-    @classmethod
-    def sample(cls) -> Self:
-        return cls(
-            SensorType.VISIBLE,
-            False,
-            random.uniform(0.1, 0.5),
-            random.uniform(1, 10),
-        )
-
-
-class BatteryDict(TypedDict):
-    capacity: float
-    percentage: float
-
-
-@dataclasses.dataclass(frozen=True)
-class Battery:
-    capacity: float  # joules
-    percentage: float  # [0., 1.]
-
-    def to_dict(self) -> BatteryDict:
-        battery = dataclasses.asdict(self)
-        return cast(BatteryDict, battery)
-
-    @property
-    def static_data(self) -> list[float]:
-        return [self.capacity]
-
-    @property
-    def dynamic_data(self) -> list[float]:
-        return [self.percentage]
-
-    @classmethod
-    def sample(cls) -> Self:
-        return cls(
-            random.uniform(8000, 30000),
-            random.uniform(0.1, 1.0),
-        )
-
-
-class ReactionWheelDict(TypedDict):
-    rw_type: str
-    rw_direction: tuple[float, float, float]
-    max_momentum: float
     rw_speed_init: float
-    power: float
-    efficiency: float
 
 
-ReactionWheelDicts = tuple[
-    ReactionWheelDict,
-    ReactionWheelDict,
-    ReactionWheelDict,
+ReactionWheelConfigGroup = tuple[
+    ReactionWheelConfig,
+    ReactionWheelConfig,
+    ReactionWheelConfig,
 ]
 
 
 @dataclasses.dataclass(frozen=True)
 class ReactionWheel:
-    rw_type: str
-    spin_axis: SpinAxis | list[SpinAxis]  # unit vector
-    angular_velocity_init: float | list[float]  # round per minute
-    power: float | list[float]  # watts
-    efficiency: float | list[float]  # (0., 1.]
+    efficiency: float
+    power: float
+    rw_speed_init: float
 
-    def to_dict(self) -> ReactionWheelDict:
-        reaction_wheel = dataclasses.asdict(self)
-        return cast(ReactionWheelDict, reaction_wheel)
 
-    @property
-    def static_data(self) -> list[float]:
+ReactionWheelGroup = tuple[ReactionWheel, ReactionWheel, ReactionWheel]
+
+
+class ReactionWheelGroups(UserList[ReactionWheelGroup]):
+
+    @classmethod
+    def from_dicts(cls, configs: Iterable[ReactionWheelConfigGroup]) -> Self:
+        return cls(
+            [tuple(ReactionWheel(*c) for c in config) for config in configs])
+
+    def to_dicts(self) -> list[ReactionWheelConfigGroup]:
+        return [(dataclasses.asdict(rw) for rw in rw_group)
+                for rw_group in self]
+
+
+Direction = tuple[float, float, float]
+
+
+class SensorConfig(TypedDict):
+    half_field_of_view: float
+    camera_direction_B_B: Direction
+    power: float
+
+
+@dataclasses.dataclass(frozen=True)
+class Sensor:
+    half_field_of_view: list[float]
+    direction: list[Direction]
+    power: list[float]
+
+    @classmethod
+    def from_dicts(cls, configs: Iterable[SensorConfig]) -> Self:
+        half_field_of_view = []
+        camera_direction_B_B = []
+        power = []
+        for config in configs:
+            half_field_of_view.append(config['half_field_of_view'])
+            camera_direction_B_B.append(
+                config.get('camera_direction_B_B', (0., 0., 1.)))
+            power.append(config['power'])
+
+        return cls(
+            half_field_of_view,
+            camera_direction_B_B,
+            power,
+        )
+
+    def to_dicts(self) -> list[SensorConfig]:
         return [
-            *self.spin_axis,
-            self.power,
-            self.efficiency,
+            ReactionWheelConfig(
+                mech_to_elec_efficiency=v,
+                base_power=cd,
+                init_speed=p,
+            ) for v, cd, p in zip(
+                self.half_field_of_view,
+                self.direction,
+                self.power,
+            )
         ]
 
-    @property
-    def dynamic_data(self) -> list[float]:
-        return [self.angular_velocity_init]
 
-
-class MRPControlDict(TypedDict):
+class MRPControlConfig(TypedDict):
     k: float
     ki: float
     p: float
@@ -202,74 +117,180 @@ class MRPControlDict(TypedDict):
 
 @dataclasses.dataclass(frozen=True)
 class MRPControl:
-    k: float
-    ki: float
-    p: float
-    integral_limit: float
+    k: list[float]
+    ki: list[float]
+    p: list[float]
+    integral_limit: list[float]
 
-    def to_dict(self) -> MRPControlDict:
-        mrp_control = dataclasses.asdict(self)
-        return cast(MRPControlDict, mrp_control)
+    @classmethod
+    def from_dicts(cls, configs: Iterable[MRPControlConfig]) -> Self:
+        k = []
+        ki = []
+        p = []
+        integral_limit = []
+        for config in configs:
+            k.append(config['k'])
+            ki.append(config['ki'])
+            p.append(config['p'])
+            integral_limit.append(config['integral_limit'])
+        return cls(k, ki, p, integral_limit)
 
-    @property
-    def data(self) -> list[float]:
-        return list(dataclasses.astuple(self))
+    def to_dicts(self) -> list[MRPControlConfig]:
+        return [
+            MRPControlConfig(
+                k=kk,
+                ki=kki,
+                p=pp,
+                integral_limit=il,
+            ) for kk, kki, pp, il in zip(
+                self.k,
+                self.ki,
+                self.p,
+                self.integral_limit,
+            )
+        ]
 
 
-class SatelliteDict(TypedDict):
-    inertia: Inertia
-    mass: float  # kg
-    center_of_mass: tuple[float, float, float]  # m
-    orbit_id: int
-    solar_panel: SolarPanelDict
-    sensor: SensorDict
-    battery: BatteryDict
-    reaction_wheels: ReactionWheelDicts
-    mrp_control: MRPControlDict
-    true_anomaly: float  # degrees
-    mrp_attitude_bn: tuple[float, float, float]
+class SolarPanelConfig(TypedDict):
+    direction: Direction
+    area: float
+    efficiency: float
 
 
 @dataclasses.dataclass(frozen=True)
-class Satellite:
-    inertia: torch.Tensor
-    mass: torch.Tensor  # kg
-    orbit: OrbitalElements
-    solar_panel: SolarPanel
-    sensor: Sensor
-    battery: Battery
-    reaction_wheels: ReactionWheel
-    mrp_control: MRPControl
-    mrp_attitude_bn: tuple[float, float, float]
-
-    def to_dict(self) -> SatelliteDict:
-        d = dataclasses.asdict(self)
-        d['id'] = d.pop('id_')
-        d['orbit'] = d.pop('orbit_id')
-        d['solar_panel'] = self.solar_panel.to_dict()
-        d['sensor'] = self.sensor.to_dict()
-        d['battery'] = self.battery.to_dict()
-        d['reaction_wheels'] = tuple(
-            reaction_wheel.to_dict()
-            for reaction_wheel in self.reaction_wheels)
-        d['mrp_control'] = self.mrp_control.to_dict()
-        return cast(SatelliteDict, d)
+class SolarPanel:
+    direction: list[Direction]
+    area: list[float]
+    efficiency: list[float]
 
     @classmethod
-    def from_dict(
+    def from_dicts(cls, configs: Iterable[SolarPanelConfig]) -> Self:
+        panel_normal_B_B = []
+        panel_area = []
+        panel_efficiency = []
+        for config in configs:
+            panel_normal_B_B.append(config['panel_normal_B_B'])
+            panel_area.append(config['panel_area'])
+            panel_efficiency.append(config['panel_efficiency'])
+        return cls(panel_normal_B_B, panel_area, panel_efficiency)
+
+    def to_dicts(self) -> list[SolarPanelConfig]:
+        return [
+            SolarPanelConfig(
+                panel_normal_B_B=pn,
+                panel_area=pa,
+                panel_efficiency=pe,
+            ) for pn, pa, pe in zip(self.direction, self.area, self.efficiency)
+        ]
+
+
+class BatteryConfig(TypedDict):
+    capacity: float
+    percentage: float
+
+
+@dataclasses.dataclass(frozen=True)
+class Battery:
+    capacity: list[float]
+    percentage: list[float]
+
+    @classmethod
+    def from_dicts(cls, configs: Iterable[BatteryConfig]) -> Self:
+        capacity = []
+        percentage = []
+        for config in configs:
+            capacity.append(config['capacity'])
+            percentage.append(config['percentage'])
+        return cls(capacity, percentage)
+
+    def to_dicts(self) -> list[BatteryConfig]:
+        capacity, percentage = dataclasses.astuple(self)
+        return [
+            BatteryConfig(
+                capacity=cap,
+                percentage=perc,
+            ) for cap, perc in zip(capacity, percentage)
+        ]
+
+
+InertiaTuple = tuple[
+    float,
+    float,
+    float,
+    float,
+    float,
+    float,
+    float,
+    float,
+    float,
+]
+
+
+class ConstellationConfig(TypedDict):
+    mass: float
+    inertia: InertiaTuple
+    reaction_wheels: ReactionWheelConfigGroup
+    sensor: SensorConfig
+    mrp_control: MRPControlConfig
+    solar_panel: SolarPanelConfig
+    battery: BatteryConfig
+
+
+@dataclasses.dataclass(frozen=True)
+class Constellation:
+    mass: list[float]
+    inertia: list[InertiaTuple]
+    reaction_wheels: ReactionWheelGroups
+    sensor: Sensor
+    mrp_control: MRPControl
+    solar_panel: SolarPanel
+    battery: Battery
+
+    def to_dict(self) -> list[ConstellationConfig]:
+        reaction_wheels = self.reaction_wheels.to_dicts()
+        sensor_config = self.sensor.to_dicts()
+        mrp_config = self.mrp_control.to_dicts()
+        solar_panel_config = self.solar_panel.to_dicts()
+        battery = self.battery.to_dicts()
+
+        return [
+            ConstellationConfig(
+                mass=m,
+                inertia=inertia,
+                reaction_wheels=rw,
+                sensor=sensor,
+                mrp_control=mrp,
+                solar_panel=panel,
+                battery=b,
+            ) for m, inertia, rw, sensor, mrp, panel, b in zip(
+                self.mass,
+                self.inertia,
+                reaction_wheels,
+                sensor_config,
+                mrp_config,
+                solar_panel_config,
+                battery,
+            )
+        ]
+
+    @classmethod
+    def from_dicts(
         cls,
-        satellite: SatelliteDict,
-        orbits: dict[int, OrbitalElements],
+        configs: list[ConstellationConfig],
     ) -> Self:
-        d = cast(dict[str, Any], satellite.copy())
-        d['id_'] = d.pop('id')
-        d['orbit_id'] = d['orbit']
-        d['orbit'] = orbits[d['orbit']]
-        d['solar_panel'] = SolarPanel(**d['solar_panel'])
-        d['sensor'] = Sensor.from_dict(d['sensor'])
-        d['battery'] = Battery(**d['battery'])
-        d['reaction_wheels'] = tuple(
-            ReactionWheel(**reaction_wheel)
-            for reaction_wheel in d.pop('reaction_wheels'))
-        d['mrp_control'] = MRPControl(**d.pop('mrp_control'))
-        return cls(**d)
+        merged = {key: [d[key] for d in configs] for key in configs[0]}
+        reaction_wheels = ReactionWheelGroups.from_dicts(
+            merged['reaction_wheels'])
+        sensor = Sensor.from_dicts(merged['sensor'])
+        mrp_control = MRPControl.from_dicts(merged['mrp_control'])
+        solar_panel = SolarPanel.from_dicts(merged['solar_panel'])
+        battery = Battery.from_dicts(merged['battery'])
+        return cls(
+            merged['mass'],
+            merged['inertia'],
+            reaction_wheels,
+            sensor,
+            mrp_control,
+            solar_panel,
+            battery,
+        )
