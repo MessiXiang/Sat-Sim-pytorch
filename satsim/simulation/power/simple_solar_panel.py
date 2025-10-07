@@ -1,4 +1,7 @@
-__all__ = ['SimpleSolarPanel']
+__all__ = [
+    'SimpleSolarPanel',
+    'SimpleSolarPanelStateDict',
+]
 from typing import TypedDict
 
 import torch
