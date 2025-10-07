@@ -178,12 +178,16 @@ class GroundMapping(Module[GroundMappingStateDict]):
         position_BL_N_norm = torch.norm(position_BL_N, dim=-1,
                                         keepdim=True)  # [n_p, n_sc, 1]
         position_BL_N_unit = position_BL_N / position_BL_N_norm  # [n_p, n_sc, 3]
-        view_angle = torch.asin(
-            torch.clamp(
-                (position_BL_N_unit * position_LP_N_unit).sum(dim=-1),
-                -1,
-                1,
-            ))
+        sin_view_angle = torch.einsum(
+            '...i, ...ji -> ...j',
+            position_BL_N_unit,
+            position_LP_N_unit,
+        )
+        view_angle = torch.asin(torch.clamp(
+            sin_view_angle,
+            -1,
+            1,
+        ))
 
         lla = PCPF2LLA(
             position_LP_P,
