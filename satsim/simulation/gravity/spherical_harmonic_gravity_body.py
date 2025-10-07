@@ -1,9 +1,14 @@
 __all__ = ['SphericalHarmonicGravityBody']
 import csv
 import math
+import os.path as osp
+from typing import Generator, Iterable, Iterator
+
 import torch
-from .gravity_body import GravityBody
 from torch import Tensor
+
+from . import __path__
+from .gravity_body import GravityBody
 
 
 class SphericalHarmonicGravityBody(GravityBody):
@@ -11,32 +16,44 @@ class SphericalHarmonicGravityBody(GravityBody):
     def __init__(
         self,
         *args,
-        gravity_file='/supportData/LocalGravData/GGM03S-J2-only.txt',
-        max_degree=2,
+        gravity_file: str | None = None,
+        max_degree: int = 2,
         **kwargs,
     ) -> None:
-
         super().__init__(*args, **kwargs)
+        if gravity_file is None:
+            path = list(__path__)[0]
+            gravity_file = osp.join(path, 'spice_kernel', 'GGM03S-J2-only.txt')
 
-        self.load_grav_from_file(gravity_file, max_deg=max_degree)
-        self.initialize_parameters()
+        self._load_grav_from_file(gravity_file, max_degree)
+        self._initialize_parameters()
 
-    def load_grav_from_file(self, file_name: str, max_deg: int = 2):
+    def _load_grav_from_file(
+        self,
+        file_name: str,
+        max_deg: int = 2,
+    ) -> None:
 
-        [clm_list, slm_list, mu,
-         rad_equator] = load_grav_from_file_to_list(file_name, max_deg=2)
+        clm_slm_iterator, mu, rad_equator = load_grav_from_file_to_list(
+            file_name, max_deg=max_deg)
 
-        self.mu_body = mu
-        self.rad_equator = rad_equator
+        self._gm = mu
+        self._equatorial_radius = rad_equator
 
-        clm_list = clm_list[:max_deg + 1]
-        slm_list = slm_list[:max_deg + 1]
+        clm_list = []
+        slm_list = []
+        for idx, (clm, slm) in enumerate(clm_slm_iterator):
+            if idx > max_deg:
+                break
+            clm_list.append(clm)
+            slm_list.append(slm)
+
         #Convert a lower triangular matrix into a full square matrix
-        self.c_bar = lower_to_full_square(clm_list)
-        self.s_bar = lower_to_full_square(slm_list)
-        self.max_deg = max_deg
+        self._c_bar = lower_to_full_square(clm_list)
+        self._s_bar = lower_to_full_square(slm_list)
+        self._max_deg = max_deg
 
-    def initialize_parameters(self):
+    def _initialize_parameters(self) -> None:
         # initialize the parameters
         n1 = []
         n2 = []
@@ -46,8 +63,8 @@ class SphericalHarmonicGravityBody(GravityBody):
 
         #init the basic parameters
         # calculate aBar / n1 / n2
-        for i in range(self.max_deg + 2):
-            a_row = [0.0] * (self.max_deg + 2)
+        for i in range(self._max_deg + 2):
+            a_row = [0.0] * (self._max_deg + 2)
             if i == 0:
                 a_row[0] = 1.0
             else:
@@ -55,8 +72,8 @@ class SphericalHarmonicGravityBody(GravityBody):
                     ((2 * i + 1) * get_k(i)) /
                     (2 * i * get_k(i - 1))) * a_bar[i - 1][i - 1]
 
-            n1Row = [0.0] * (self.max_deg + 2)
-            n2Row = [0.0] * (self.max_deg + 2)
+            n1Row = [0.0] * (self._max_deg + 2)
+            n2Row = [0.0] * (self._max_deg + 2)
             for m in range(i + 1):
                 if i >= m + 2:
                     n1Row[m] = math.sqrt(
@@ -69,9 +86,9 @@ class SphericalHarmonicGravityBody(GravityBody):
             n2.append(n2Row)
 
         # init nQuot1 / nQuot2
-        for l in range(self.max_deg + 1):
-            nq1_row = [0.0] * (self.max_deg + 1)
-            nq2_row = [0.0] * (self.max_deg + 1)
+        for l in range(self._max_deg + 1):
+            nq1_row = [0.0] * (self._max_deg + 1)
+            nq2_row = [0.0] * (self._max_deg + 1)
             for m in range(l + 1):
                 if m < l:
                     nq1_row[m] = math.sqrt(
@@ -120,38 +137,24 @@ class SphericalHarmonicGravityBody(GravityBody):
             for near-body orbital dynamics.
         """
 
-        device = relative_position.device
-        dtype = relative_position.dtype
-
-        degree = self.max_deg
+        degree = self._max_deg
         include_zero_degree = True
         order = degree
 
-        x = relative_position[..., 0].unsqueeze(-1)
-        y = relative_position[..., 1].unsqueeze(-1)
-        z = relative_position[..., 2].unsqueeze(-1)
+        relative_direction = torch.nn.functional.normalize(
+            relative_position,
+            dim=-1,
+        )
+        s, t, u = relative_direction.unbind(-1)
 
-        r = torch.norm(relative_position, dim=-1, keepdim=True)
-        s = x / r
-        t = y / r
-        u = z / r
-
-        a_bar_t = expand_matrix(self.a_bar,
-                                relative_position,
-                                dtype=dtype,
-                                device=device)
-        n1_t = expand_matrix(self.n1,
-                             relative_position,
-                             dtype=dtype,
-                             device=device)
-        n2_t = expand_matrix(self.n2,
-                             relative_position,
-                             dtype=dtype,
-                             device=device)
+        a_bar_t = expand_matrix(self.a_bar, relative_position)
+        n1_t = expand_matrix(self.n1, relative_position)
+        n2_t = expand_matrix(self.n2, relative_position)
 
         l_idx = torch.arange(1, degree + 2, device=a_bar_t.device)
         coef = torch.where(l_idx == 1, torch.ones_like(l_idx, dtype=u.dtype),
                            torch.sqrt(2.0 * l_idx.to(u.dtype)))
+
         a_bar_t[..., l_idx, l_idx - 1] = coef * a_bar_t[..., l_idx, l_idx] * u
 
         m_all = torch.arange(order + 2, device=a_bar_t.device)
@@ -178,8 +181,9 @@ class SphericalHarmonicGravityBody(GravityBody):
         rE = z_pow.real
         iM = z_pow.imag
 
-        rho = self.rad_equator / r
-        rhol_0 = self.mu_body / r
+        r = torch.norm(relative_position, dim=-1, keepdim=True)
+        rho = self._equatorial_radius / r
+        rhol_0 = self._gm / r
 
         powers = torch.arange(degree + 2, device=rho.device, dtype=rho.dtype)
         rhol = rhol_0 * rho.pow(powers)
@@ -189,29 +193,17 @@ class SphericalHarmonicGravityBody(GravityBody):
         a3 = torch.zeros_like(r)
         a4 = torch.zeros_like(r)
         if include_zero_degree:
-            a4[..., 0] = -rhol[..., 1] / self.rad_equator
+            a4[..., 0] = -rhol[..., 1] / self._equatorial_radius
 
         sum_a1 = torch.zeros_like(r)
         sum_a2 = torch.zeros_like(r)
         sum_a3 = torch.zeros_like(r)
         sum_a4 = torch.zeros_like(r)
 
-        c_bar_t = expand_matrix(self.c_bar,
-                                relative_position,
-                                dtype=dtype,
-                                device=device)
-        s_bar_t = expand_matrix(self.s_bar,
-                                relative_position,
-                                dtype=dtype,
-                                device=device)
-        n_quot1_t = expand_matrix(self.n_quot1,
-                                  relative_position,
-                                  dtype=dtype,
-                                  device=device)
-        n_quot2_t = expand_matrix(self.n_quot2,
-                                  relative_position,
-                                  dtype=dtype,
-                                  device=device)
+        c_bar_t = expand_matrix(self._c_bar, relative_position)
+        s_bar_t = expand_matrix(self._s_bar, relative_position)
+        n_quot1_t = expand_matrix(self.n_quot1, relative_position)
+        n_quot2_t = expand_matrix(self.n_quot2, relative_position)
 
         for l in range(1, degree + 1):
             M = l + 1
@@ -248,7 +240,7 @@ class SphericalHarmonicGravityBody(GravityBody):
                                                             keepdim=True)
             sum_a4 = (nQ2 * aLp1_mplus1 * D).sum(dim=-1, keepdim=True)
 
-            coeff = rhol[..., l + 1].unsqueeze(-1) / self.rad_equator
+            coeff = rhol[..., l + 1].unsqueeze(-1) / self._equatorial_radius
             a1 += coeff * sum_a1
             a2 += coeff * sum_a2
             a3 += coeff * sum_a3
@@ -267,73 +259,85 @@ class SphericalHarmonicGravityBody(GravityBody):
         return acceleration
 
 
-def load_grav_from_file_to_list(file_name: str, max_deg: int = 2):
+def load_grav_from_file_to_list(
+    file_name: str,
+    max_deg: int = 2,
+) -> tuple[
+        Iterator[tuple[list[float], list[float]]],
+        float,
+        float,
+]:
     with open(file_name, 'r') as csvfile:
         grav_reader = csv.reader(csvfile, delimiter=',')
         first_row = next(grav_reader)
-        clm_list = []
-        slm_list = []
 
-        try:
-            rad_equator = float(first_row[0])
-            mu = float(first_row[1])
-            max_degree_file = int(first_row[3])
-            max_order_file = int(first_row[4])
-            coefficients_normalized = int(first_row[5]) == 1
-            ref_long = float(first_row[6])
-            ref_lat = float(first_row[7])
-        except Exception as ex:
-            raise ValueError(
-                "File is not in the expected JPL format for "
-                "spherical Harmonics", ex)
+    try:
+        rad_equator = float(first_row[0])
+        mu = float(first_row[1])
+        max_degree_file = int(first_row[3])
+        max_order_file = int(first_row[4])
+        coefficients_normalized = int(first_row[5]) == 1
+        ref_long = float(first_row[6])
+        ref_lat = float(first_row[7])
+    except Exception as ex:
+        raise ValueError(
+            "File is not in the expected JPL format for "
+            "spherical Harmonics", ex)
 
-        if max_degree_file < max_deg or max_order_file < max_deg:
-            raise ValueError(
-                f"Requested using Spherical Harmonics of degree {max_deg}"
-                f", but file '{file_name}' has maximum degree/order of"
-                f"{min(max_degree_file, max_order_file)}")
+    if max_degree_file < max_deg or max_order_file < max_deg:
+        raise ValueError(
+            f"Requested using Spherical Harmonics of degree {max_deg}"
+            f", but file '{file_name}' has maximum degree/order of"
+            f"{min(max_degree_file, max_order_file)}")
 
-        if not coefficients_normalized:
-            raise ValueError(
-                "Coefficients in given file are not normalized. This is "
-                "not currently supported in Basilisk.")
+    if not coefficients_normalized:
+        raise ValueError(
+            "Coefficients in given file are not normalized. This is "
+            "not currently supported.")
 
-        if ref_long != 0 or ref_lat != 0:
-            raise ValueError(
-                "Coefficients in given file use a reference longitude"
-                " or latitude that is not zero. This is not currently "
-                "supported in Basilisk.")
+    if ref_long != 0 or ref_lat != 0:
+        raise ValueError(
+            "Coefficients in given file use a reference longitude"
+            " or latitude that is not zero. This is not currently "
+            "supported.")
 
-        clm_row = []
-        slm_row = []
-        curr_deg = 0
-        for grav_row in grav_reader:
-            while int(grav_row[0]) > curr_deg:
-                if (len(clm_row) < curr_deg + 1):
-                    clm_row.extend([0.0] * (curr_deg + 1 - len(clm_row)))
-                    slm_row.extend([0.0] * (curr_deg + 1 - len(slm_row)))
-                clm_list.append(clm_row)
-                slm_list.append(slm_row)
-                clm_row = []
-                slm_row = []
-                curr_deg += 1
-            clm_row.append(float(grav_row[2]))
-            slm_row.append(float(grav_row[3]))
+    def params_iterator() -> Iterator[tuple[list[float], list[float]]]:
+        with open(file_name, 'r') as csvfile:
+            grav_reader = csv.reader(csvfile, delimiter=',')
+            next(grav_reader)
 
-        return [clm_list, slm_list, mu, rad_equator]
+            clm_row = []
+            slm_row = []
+            curr_deg = 0
+            for grav_row in grav_reader:
+                while int(grav_row[0]) > curr_deg:
+                    if (len(clm_row) < curr_deg + 1):
+                        clm_row.extend([0.0] * (curr_deg + 1 - len(clm_row)))
+                        slm_row.extend([0.0] * (curr_deg + 1 - len(slm_row)))
+                    yield clm_row, slm_row
+                    clm_row = []
+                    slm_row = []
+                    curr_deg += 1
+                clm_row.append(float(grav_row[2]))
+                slm_row.append(float(grav_row[3]))
+
+    return params_iterator(), mu, rad_equator
 
 
 def get_k(degree: int) -> float:
     return 1.0 if degree == 0 else 2.0
 
 
-def expand_matrix(matrix_list, ref_tensor, dtype=None, device=None):
-    batch, num = ref_tensor.shape[0], ref_tensor.shape[1]
-    mat = torch.tensor(matrix_list, dtype=dtype, device=device)
-    return mat.unsqueeze(0).unsqueeze(0).expand(batch, num, -1, -1).clone()
+def expand_matrix(
+    matrix: torch.Tensor,
+    ref_tensor: torch.Tensor,
+) -> torch.Tensor:
+    num = ref_tensor.shape[0]
+    mat = torch.tensor(matrix).to(ref_tensor)
+    return mat.unsqueeze(0).expand(num, -1, -1)
 
 
-def lower_to_full_square(lower_list):
+def lower_to_full_square(lower_list: list[list[float]]) -> list[list[float]]:
     """
     input: lower_list
     output: square_list
