@@ -1,27 +1,23 @@
+__all__ = [
+    'RemoteSensingConstellationStateDict',
+    'RemoteSensingConstellation',
+]
 from typing import TypedDict, cast
 
-import einops
 import torch
 import torch.nn.functional as F
 
-from satsim.architecture import Module, VoidStateDict, constants
-from satsim.data import (Constellation, OrbitalElements, OrbitDict,
-                         ReactionWheelGroups, elem2rv)
-from satsim.simulation.base.battery_base import BatteryStateDict
-from satsim.simulation.eclipse import compute_shadow_factor
+from satsim.architecture import Module, constants
+from satsim.data import (Constellation, OrbitalElements, ReactionWheelGroups,
+                         elem2rv)
 from satsim.simulation.gravity import (Ephemeris, GravityField,
-                                       PointMassGravityBody,
-                                       SphericalHarmonicGravityBody,
-                                       SpiceInterface)
-from satsim.simulation.power import (NoBattery, SimpleBattery, SimplePowerSink,
-                                     SimplePowerSinkStateDict,
-                                     SimpleSolarPanel)
+                                       PointMassGravityBody, SpiceInterface)
 from satsim.simulation.reaction_wheels import (HoneywellHR12Small,
                                                ReactionWheels, concat)
 from satsim.simulation.spacecraft import (IntegrateMethod, Spacecraft,
                                           SpacecraftStateDict,
                                           SpacecraftStateOutput)
-from satsim.utils import move_to, mrp_to_rotation_matrix
+from satsim.utils import move_to
 
 from .components import (PointingGuide, PointingGuideStateDict, PowerSupply,
                          PowerSupplyStateDict, RemoteSensing,
@@ -278,6 +274,7 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
     def _verify_sensing_acquisition(
         self,
         state_dict: RemoteSensingConstellationStateDict,
+        sensor_turn_on: torch.Tensor,
         earth_ephemeris: Ephemeris,
         position_BN_N: torch.Tensor,
         velocity_BN_N: torch.Tensor,
@@ -291,7 +288,8 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
             position_LN_N,
         ) = self._remote_sensing(
             remote_sensing_state_dict,
-            battery_state_dict,
+            battery_state_dict=battery_state_dict,
+            sensor_turn_on=sensor_turn_on,
             earth_ephemeris=earth_ephemeris,
             position_BN_N=position_BN_N,
             velocity_BN_N=velocity_BN_N,
@@ -300,40 +298,12 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
         )
         return state_dict, is_filming, position_LN_N
 
-    def _monitor_angle_error(
-        self,
-        state_dict: RemoteSensingConstellationStateDict,
-        position_LN_N: torch.Tensor,
-        spacecraft_state_output: SpacecraftStateOutput,
-    ) -> torch.Tensor:
-        spacecraft_state_dict = state_dict['_spacecraft']
-        attitude_BN = spacecraft_state_dict['_hub']['dynamic_params'][
-            'attitude_BN']
-
-        position_LB_N = position_LN_N - spacecraft_state_output.position_BN_N  # [b, ..., 3]
-
-        # principle rotation angle to point pHat at location
-        direction_cosine_matrix_BN = mrp_to_rotation_matrix(
-            attitude_BN)  # [b, ..., 3, 3]
-        position_LB_B = torch.einsum(
-            "...ij,...j->...i",
-            direction_cosine_matrix_BN,
-            position_LB_N,
-        )
-        position_LB_B_unit = F.normalize(position_LB_B, dim=-1)
-
-        dum1 = torch.sum(torch.tensor([0., 0., 1.]) * position_LB_B_unit,
-                         dim=-1)
-        dum1 = torch.clamp(dum1, -1.0, 1.0)
-        angle_error = torch.acos(dum1)
-
-        return angle_error
-
     def forward(
         self,
         state_dict: RemoteSensingConstellationStateDict,
         *args,
         charging: torch.Tensor | None = None,
+        sensor_turn_on: torch.Tensor,
         **kwargs,
     ) -> tuple[RemoteSensingConstellationStateDict, tuple]:
         spacecraft_state_dict = state_dict['_spacecraft']
@@ -363,6 +333,7 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
         )
         state_dict, is_filming, position_LN_N = self._verify_sensing_acquisition(
             state_dict,
+            sensor_turn_on,
             earth_ephemeris,
             spacecraft_state_output.position_BN_N,
             spacecraft_state_output.velocity_BN_N,
@@ -387,14 +358,7 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
             spacecraft_state_output,
         )
 
-        angle_error = self._monitor_angle_error(
-            state_dict,
-            position_LN_N,
-            spacecraft_state_output,
-        )
-
         return state_dict, (
-            angle_error,
             is_filming,
             spacecraft_state_output,
             battery_state_dict['stored_charge_percentage'],

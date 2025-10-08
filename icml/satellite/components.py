@@ -223,6 +223,7 @@ class RemoteSensing(Module[RemoteSensingStateDict]):
         state_dict: RemoteSensingStateDict,
         *args,
         battery_state_dict: BatteryStateDict,
+        sensor_turn_on: torch.Tensor,
         earth_ephemeris: Ephemeris,
         position_BN_N: torch.Tensor,
         velocity_BN_N: torch.Tensor,
@@ -252,6 +253,7 @@ class RemoteSensing(Module[RemoteSensingStateDict]):
             battery_state_dict,
         ) = self._power_sink(
             power_sink_stat_dict,
+            turn_on=sensor_turn_on,
             battery_state_dict=battery_state_dict,
         )
 
