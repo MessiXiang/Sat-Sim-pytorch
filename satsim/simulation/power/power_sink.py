@@ -36,14 +36,19 @@ class SimplePowerSink(Module[SimplePowerSinkStateDict], PowerNodeMixin):
         self,
         state_dict: SimplePowerSinkStateDict,
         *args,
+        turn_on: torch.Tensor,
         battery_state_dict: BatteryStateDict,
         **kwargs,
     ) -> tuple[
             SimplePowerSinkStateDict,
             tuple[torch.Tensor, BatteryStateDict],
     ]:
-
+        power_efficiency = torch.where(
+            turn_on,
+            self.power_efficiency,
+            0.,
+        )
         power_status, battery = self.update_power_status(
-            self.power_efficiency, battery_state_dict)
+            power_efficiency, battery_state_dict)
 
         return state_dict, (power_status, battery)
