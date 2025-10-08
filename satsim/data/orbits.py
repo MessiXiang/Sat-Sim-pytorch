@@ -1,4 +1,9 @@
-__all__ = ['OrbitDict', 'OrbitalElements', 'elem2rv']
+__all__ = [
+    'OrbitDict',
+    'OrbitalElements',
+    'elem2rv',
+    'calculate_true_anomaly',
+]
 import dataclasses
 import random
 import warnings
@@ -70,6 +75,7 @@ class OrbitalElements(UserList[OrbitalElement]):
     def to_dicts(self) -> list[OrbitDict]:
         return [element.to_dict() for element in self]
 
+    @classmethod
     def sample(cls, n: int) -> Self:
         return cls([OrbitalElement.sample() for i in range(n)])
 
@@ -156,3 +162,38 @@ def elem2rv(
                    torch.cos(theta)) * torch.sin(inclination)
 
     return torch.stack([r1, r2, r3], dim=-1), torch.stack([v1, v2, v3], dim=-1)
+
+
+def calculate_true_anomaly(
+    mu: float,
+    r: torch.Tensor,
+    v: torch.Tensor,
+) -> torch.Tensor:
+    # Orbit eccentricity and energy #
+    r_norm = r.norm(dim=-1)
+    v_squared_norm = torch.einsum('...i, ...i -> ...', v, v)
+    e = (v_squared_norm / mu - 1.0 / r_norm).unsqueeze(-1) * r
+
+    r_dot_v = torch.einsum('...i, ...i -> ...', r, v)
+    v3 = (r_dot_v / mu).unsqueeze(-1) * v
+    e = e - v3
+    eccentricity = e.norm(dim=-1)
+
+    # Calculate the inclination #
+    if (eccentricity < eps).any():
+        raise ValueError("Orbit is non-elliptical.")
+
+    e_dot_r = torch.einsum('...i, ...i -> ...', e, r)
+    true_anomaly = torch.acos(
+        torch.clamp(
+            e_dot_r / eccentricity / r_norm,
+            -1.,
+            1.,
+        ))
+    true_anomaly = torch.where(
+        r_dot_v < 0.,
+        2 * torch.pi - true_anomaly,
+        true_anomaly,
+    )
+
+    return true_anomaly
