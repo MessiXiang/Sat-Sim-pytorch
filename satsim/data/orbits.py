@@ -59,10 +59,10 @@ class OrbitalElement:
         return cls(
             round(random.uniform(6.8e6, 8e6), 1),
             round(random.uniform(0, 0.005), 6),
-            round(random.uniform(0, torch.pi), 1),
-            round(random.uniform(0, 2 * torch.pi), 1),
-            round(random.uniform(0, 2 * torch.pi), 1),
-            round(random.uniform(0, 2 * torch.pi), 1),
+            round(random.uniform(0, 1) * torch.pi, 1),
+            round(random.uniform(0, 2) * torch.pi, 1),
+            round(random.uniform(0, 2) * torch.pi, 1),
+            round(random.uniform(0, 2) * torch.pi, 1),
         )
 
 

@@ -19,12 +19,26 @@ __all__ = [
 ]
 
 import dataclasses
+import math
+import random
 from collections import UserList
 from typing import Iterable, TypedDict
 
 import torch
-from attr import asdict, dataclass
 from typing_extensions import Self
+
+Direction = tuple[float, float, float]
+
+
+def sample_direction(n: int) -> list[Direction]:
+    phi = [random.uniform(0, 1) * torch.pi for _ in range(n)]
+    theta = [random.uniform(-0.5, 0.5) * torch.pi for _ in range(n)]
+    directions = [(
+        math.cos(t) * math.cos(p),
+        math.cos(t) * math.sin(p),
+        math.sin(t),
+    ) for t, p in zip(theta, phi)]
+    return directions
 
 
 class ReactionWheelConfig(TypedDict):
@@ -46,6 +60,14 @@ class ReactionWheel:
     power: float
     rw_speed_init: float
 
+    @classmethod
+    def sample(cls) -> Self:
+        return cls(
+            round(random.uniform(0.5, 0.6), 4),
+            round(random.uniform(4., 6.), 3),
+            round(random.uniform(-100, 100), 1),
+        )
+
 
 ReactionWheelGroup = tuple[ReactionWheel, ReactionWheel, ReactionWheel]
 
@@ -55,19 +77,21 @@ class ReactionWheelGroups(UserList[ReactionWheelGroup]):
     @classmethod
     def from_dicts(cls, configs: Iterable[ReactionWheelConfigGroup]) -> Self:
         return cls(
-            [tuple(ReactionWheel(*c) for c in config) for config in configs])
+            [tuple(ReactionWheel(**c) for c in config) for config in configs])
+
+    @classmethod
+    def sample(cls, n: int) -> Self:
+        return cls([[ReactionWheel.sample() for _ in range(3)]
+                    for _ in range(n)])
 
     def to_dicts(self) -> list[ReactionWheelConfigGroup]:
-        return [(dataclasses.asdict(rw) for rw in rw_group)
+        return [[dataclasses.asdict(rw) for rw in rw_group]
                 for rw_group in self]
-
-
-Direction = tuple[float, float, float]
 
 
 class SensorConfig(TypedDict):
     half_field_of_view: float
-    camera_direction_B_B: Direction
+    direction: Direction
     power: float
 
 
@@ -84,8 +108,7 @@ class Sensor:
         power = []
         for config in configs:
             half_field_of_view.append(config['half_field_of_view'])
-            camera_direction_B_B.append(
-                config.get('camera_direction_B_B', (0., 0., 1.)))
+            camera_direction_B_B.append(config.get('direction', (0., 0., 1.)))
             power.append(config['power'])
 
         return cls(
@@ -94,12 +117,20 @@ class Sensor:
             power,
         )
 
+    @classmethod
+    def sample(cls, n: int) -> Self:
+        return cls(
+            [round(random.uniform(0.1, 0.3), 5) for _ in range(n)],
+            sample_direction(n),
+            [random.uniform(1, 10) for _ in range(n)],
+        )
+
     def to_dicts(self) -> list[SensorConfig]:
         return [
-            ReactionWheelConfig(
-                mech_to_elec_efficiency=v,
-                base_power=cd,
-                init_speed=p,
+            SensorConfig(
+                half_field_of_view=v,
+                direction=cd,
+                power=p,
             ) for v, cd, p in zip(
                 self.half_field_of_view,
                 self.direction,
@@ -150,6 +181,16 @@ class MRPControl:
             )
         ]
 
+    @classmethod
+    def sample(cls, n: int) -> Self:
+        ki = [random.uniform(5e-4, 5e-3) for _ in range(n)]
+        return cls(
+            [random.uniform(7, 9) for _ in range(n)],
+            ki,
+            [random.uniform(25, 30) for _ in range(n)],
+            [kki / 2 for kki in ki],
+        )
+
 
 class SolarPanelConfig(TypedDict):
     direction: Direction
@@ -169,19 +210,27 @@ class SolarPanel:
         panel_area = []
         panel_efficiency = []
         for config in configs:
-            panel_normal_B_B.append(config['panel_normal_B_B'])
-            panel_area.append(config['panel_area'])
-            panel_efficiency.append(config['panel_efficiency'])
+            panel_normal_B_B.append(config['direction'])
+            panel_area.append(config['area'])
+            panel_efficiency.append(config['efficiency'])
         return cls(panel_normal_B_B, panel_area, panel_efficiency)
 
     def to_dicts(self) -> list[SolarPanelConfig]:
         return [
             SolarPanelConfig(
-                panel_normal_B_B=pn,
-                panel_area=pa,
-                panel_efficiency=pe,
+                direction=pn,
+                area=pa,
+                efficiency=pe,
             ) for pn, pa, pe in zip(self.direction, self.area, self.efficiency)
         ]
+
+    @classmethod
+    def sample(cls, n: int) -> Self:
+        return cls(
+            sample_direction(n),
+            [random.uniform(0.1, 0.5) for _ in range(n)],
+            [random.uniform(0.3, 0.42) for _ in range(n)],
+        )
 
 
 class BatteryConfig(TypedDict):
@@ -211,6 +260,13 @@ class Battery:
                 percentage=perc,
             ) for cap, perc in zip(capacity, percentage)
         ]
+
+    @classmethod
+    def sample(cls, n: int) -> Self:
+        return cls(
+            [random.uniform(8000, 30000) for _ in range(n)],
+            [random.uniform(0.5, 1.0) for _ in range(n)],
+        )
 
 
 InertiaTuple = tuple[
@@ -245,6 +301,10 @@ class Constellation:
     mrp_control: MRPControl
     solar_panel: SolarPanel
     battery: Battery
+
+    @property
+    def num_satellite(self) -> int:
+        return len(self.mass)
 
     def to_dict(self) -> list[ConstellationConfig]:
         reaction_wheels = self.reaction_wheels.to_dicts()
@@ -288,6 +348,28 @@ class Constellation:
         return cls(
             merged['mass'],
             merged['inertia'],
+            reaction_wheels,
+            sensor,
+            mrp_control,
+            solar_panel,
+            battery,
+        )
+
+    @classmethod
+    def sample(cls, n: int) -> Self:
+        reaction_wheels = ReactionWheelGroups.sample(n)
+        sensor = Sensor.sample(n)
+        mrp_control = MRPControl.sample(n)
+        solar_panel = SolarPanel.sample(n)
+        battery = Battery.sample(n)
+
+        mass = [random.uniform(50, 200) for _ in range(n)]
+        inertia = [[random.uniform(50, 200) for _ in range(3)]
+                   for _ in range(n)]
+        inertia = [(i[0], 0, 0, 0, i[1], 0, 0, 0, i[2]) for i in inertia]
+        return cls(
+            mass,
+            inertia,
             reaction_wheels,
             sensor,
             mrp_control,
