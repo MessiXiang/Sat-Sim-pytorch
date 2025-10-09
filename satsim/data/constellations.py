@@ -41,6 +41,13 @@ def sample_direction(n: int) -> list[Direction]:
     return directions
 
 
+def normalize_uniform_distribution(sample: torch.Tensor, low: float,
+                                   high: float):
+    sigma = (high - low) / (2 * math.sqrt(3))
+    mean = (high + low) / 2
+    return (sample - mean) / sigma
+
+
 class ReactionWheelConfig(TypedDict):
     efficiency: float
     power: float
@@ -68,6 +75,10 @@ class ReactionWheel:
             round(random.uniform(-100, 100), 1),
         )
 
+    @property
+    def normalized_static_data(self) -> list[float]:
+        return [self.efficiency, (self.power - 5) * math.sqrt(3)]
+
 
 ReactionWheelGroup = tuple[ReactionWheel, ReactionWheel, ReactionWheel]
 
@@ -87,6 +98,13 @@ class ReactionWheelGroups(UserList[ReactionWheelGroup]):
     def to_dicts(self) -> list[ReactionWheelConfigGroup]:
         return [[dataclasses.asdict(rw) for rw in rw_group]
                 for rw_group in self]
+
+    @property
+    def normalized_static_data(self) -> torch.Tensor:
+        data = [[rw.normalized_static_data for rw in rw_group]
+                for rw_group in self]
+        data = torch.tensor(data).view(-1, 6)
+        return data
 
 
 class SensorConfig(TypedDict):
@@ -137,6 +155,26 @@ class Sensor:
                 self.power,
             )
         ]
+
+    @property
+    def normalized_static_data(self) -> torch.Tensor:
+        directions = torch.tensor(self.direction)
+        data = torch.stack(
+            [
+                normalize_uniform_distribution(
+                    torch.tensor(self.half_field_of_view),
+                    0.1,
+                    0.3,
+                ),
+                normalize_uniform_distribution(
+                    torch.tensor(self.power),
+                    1,
+                    10,
+                )
+            ],
+            dim=-1,
+        )
+        return torch.cat([directions, data], dim=-1)
 
 
 class MRPControlConfig(TypedDict):
@@ -191,6 +229,28 @@ class MRPControl:
             [kki / 2 for kki in ki],
         )
 
+    @property
+    def normalized_static_data(self) -> torch.Tensor:
+        ki = normalize_uniform_distribution(
+            torch.tensor(self.ki),
+            5e-4,
+            5e-3,
+        )
+        k = normalize_uniform_distribution(
+            torch.tensor(self.k),
+            7,
+            9,
+        )
+        p = normalize_uniform_distribution(
+            torch.tensor(self.p),
+            25,
+            30,
+        )
+        return torch.stack(
+            [ki, k, p],
+            dim=-1,
+        )
+
 
 class SolarPanelConfig(TypedDict):
     direction: Direction
@@ -232,6 +292,25 @@ class SolarPanel:
             [random.uniform(0.3, 0.42) for _ in range(n)],
         )
 
+    @property
+    def normalized_static_data(self) -> torch.Tensor:
+        directions = torch.tensor(self.direction)
+        area = normalize_uniform_distribution(
+            torch.tensor(self.area),
+            0.1,
+            0.5,
+        )
+        efficiency = normalize_uniform_distribution(
+            torch.tensor(self.efficiency),
+            0.3,
+            0.42,
+        )
+        data = torch.stack([area, efficiency], dim=-1)
+        return torch.cat(
+            [data, directions],
+            dim=-1,
+        )
+
 
 class BatteryConfig(TypedDict):
     capacity: float
@@ -267,6 +346,14 @@ class Battery:
             [random.uniform(8000, 30000) for _ in range(n)],
             [random.uniform(0.5, 1.0) for _ in range(n)],
         )
+
+    @property
+    def normalized_static_data(self) -> torch.Tensor:
+        return normalize_uniform_distribution(
+            torch.tensor(self.capacity),
+            8000,
+            30000,
+        ).unsqueeze(-1)
 
 
 InertiaTuple = tuple[
@@ -375,4 +462,40 @@ class Constellation:
             mrp_control,
             solar_panel,
             battery,
+        )
+
+    @property
+    def normalized_static_data(self) -> torch.Tensor:
+        normalized_mass = normalize_uniform_distribution(
+            torch.tensor(self.mass),
+            50,
+            200,
+        ).unsqueeze(-1)
+
+        inertia = torch.tensor([[i[0], i[4], i[8]] for i in self.inertia])
+        inertia = torch.tensor(inertia)
+        normalized_inertia = normalize_uniform_distribution(
+            inertia,
+            50,
+            200,
+        )
+
+        reaction_wheels_data = self.reaction_wheels.normalized_static_data
+        sensor_data = self.sensor.normalized_static_data
+        mrp_control_data = self.mrp_control.normalized_static_data
+        solar_panel_data = self.solar_panel.normalized_static_data
+        battery_data = self.battery.normalized_static_data
+
+        # return a [n, 25] size tensor
+        return torch.cat(
+            [
+                normalized_mass,
+                normalized_inertia,
+                reaction_wheels_data,
+                sensor_data,
+                mrp_control_data,
+                solar_panel_data,
+                battery_data,
+            ],
+            dim=-1,
         )
