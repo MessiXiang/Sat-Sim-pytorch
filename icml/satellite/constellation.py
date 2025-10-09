@@ -5,7 +5,6 @@ __all__ = [
 from typing import TypedDict, cast
 
 import torch
-import torch.nn.functional as F
 
 from satsim.architecture import Module, constants
 from satsim.data import (Constellation, OrbitalElements, ReactionWheelGroups,
@@ -140,7 +139,6 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
         reaction_wheel_0 = concat(reaction_wheels_0)
         reaction_wheel_1 = concat(reaction_wheels_1)
         reaction_wheel_2 = concat(reaction_wheels_2)
-
         return ReactionWheels(
             timer=self._timer,
             reaction_wheels=[
@@ -165,13 +163,15 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
         if self._use_battery:
             self._sun_guide = PointingGuide(
                 timer=self._timer,
-                poiniting_direction_B_B=constellation.solar_panel.direction,
+                poiniting_direction_B_B=torch.tensor(
+                    constellation.solar_panel.direction),
                 mrp_control=constellation.mrp_control,
             )
 
         self._pointing_guide = PointingGuide(
             timer=self._timer,
-            poiniting_direction_B_B=constellation.sensor.direction,
+            poiniting_direction_B_B=torch.tensor(
+                constellation.sensor.direction),
             mrp_control=constellation.mrp_control,
         )
 
@@ -199,6 +199,7 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
         attitude_BN = spacecraft_state_dict['_hub']['dynamic_params'][
             'attitude_BN']
 
+        battery_state_dict = state_dict['_power_supply']['_battery']
         reaction_wheels_state_dict = state_dict['_spacecraft'][
             '_reaction_wheels']
         reaction_wheels_state_dict, (
@@ -229,19 +230,24 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
         position_BN_N: torch.Tensor,
         attitude_BN: torch.Tensor,
         angular_velocity_BN_B: torch.Tensor,
+        sun_ephemeris: Ephemeris,
         charge: torch.Tensor | None = None,
     ) -> tuple[RemoteSensingConstellationStateDict, torch.Tensor]:
 
         pointing_guide_state_dict = state_dict['_pointing_guide']
-        sun_guide_state_dict, (command_torque, ) = self._sun_guide(
+        pointing_guide_state_dict, (command_torque, ) = self._pointing_guide(
             pointing_guide_state_dict,
-            position_LN_N,
-            position_BN_N,
-            attitude_BN,
-            angular_velocity_BN_B,
-            self._spacecraft._hub.moment_of_inertia_matrix_wrt_body_point,
-            self.reaction_wheels.moment_of_inertia_wrt_spin,
-            self.reaction_wheels.spin_axis_in_body,
+            position_LN_N=position_LN_N,
+            position_BN_N=position_BN_N,
+            attitude_BN=attitude_BN,
+            angular_velocity_BN_B=angular_velocity_BN_B,
+            reaction_wheels_speed=state_dict['_spacecraft']['_reaction_wheels']
+            ['dynamic_params']['angular_velocity'],
+            moment_of_inertia_matrix_wrt_body_point=self._spacecraft._hub.
+            moment_of_inertia_matrix_wrt_body_point,
+            moment_of_inertia_wrt_spin=self.reaction_wheels.
+            moment_of_inertia_wrt_spin,
+            spin_axis_in_body=self.reaction_wheels.spin_axis_in_body,
         )
 
         if self._use_battery:
@@ -249,19 +255,24 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
                 raise ValueError(
                     "when battery is used, you must determine whether to charge"
                 )
+            position_SN_N = sun_ephemeris['position_CN_N']
             sun_guide_state_dict = state_dict['_sun_guide']
             sun_guide_state_dict, (
-                sun_guide_command_torque,
-            ) = self._sun_guide(
-                sun_guide_state_dict,
-                position_LN_N,
-                position_BN_N,
-                attitude_BN,
-                angular_velocity_BN_B,
-                self._spacecraft._hub.moment_of_inertia_matrix_wrt_body_point,
-                self.reaction_wheels.moment_of_inertia_wrt_spin,
-                self.reaction_wheels.spin_axis_in_body,
-            )
+                sun_guide_command_torque, ) = self._sun_guide(
+                    sun_guide_state_dict,
+                    position_LN_N=position_SN_N,
+                    position_BN_N=position_BN_N,
+                    attitude_BN=attitude_BN,
+                    angular_velocity_BN_B=angular_velocity_BN_B,
+                    reaction_wheels_speed=state_dict['_spacecraft']
+                    ['_reaction_wheels']['dynamic_params']['angular_velocity'],
+                    moment_of_inertia_matrix_wrt_body_point=(
+                        self._spacecraft._hub.
+                        moment_of_inertia_matrix_wrt_body_point),
+                    moment_of_inertia_wrt_spin=self.reaction_wheels.
+                    moment_of_inertia_wrt_spin,
+                    spin_axis_in_body=self.reaction_wheels.spin_axis_in_body,
+                )
 
             command_torque = torch.where(
                 charge.unsqueeze(-1),
@@ -347,6 +358,7 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
             spacecraft_state_output.position_BN_N,
             attitude_BN,
             angular_velocity_BN_B,
+            sun_ephemeris,
             charging,
         )
 
@@ -355,7 +367,7 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
             motor_torque,
             earth_ephemeris,
             sun_ephemeris,
-            spacecraft_state_output,
+            spacecraft_state_output.position_BN_N,
         )
 
         return state_dict, (
@@ -366,9 +378,6 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
 
     def setup_target(
         self,
-        state_dict: RemoteSensingConstellationStateDict,
         position_LP_P: torch.Tensor,
-    ) -> RemoteSensingConstellationStateDict:
+    ) -> None:
         self._position_LP_P = position_LP_P
-
-        return state_dict

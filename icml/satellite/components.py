@@ -55,7 +55,9 @@ class PointingGuide(Module[PointingGuideStateDict]):
         *args,
         poiniting_direction_B_B: torch.Tensor,
         mrp_control: MRPControl,
+        **kwargs,
     ) -> None:
+        super().__init__(*args, **kwargs)
         self._location_poiniting = LocationPointing(
             timer=self._timer,
             pointing_direction_B_B=poiniting_direction_B_B,
@@ -63,10 +65,10 @@ class PointingGuide(Module[PointingGuideStateDict]):
 
         self._mrp_control = MRPFeedback(
             timer=self._timer,
-            k=mrp_control.k,
-            ki=mrp_control.ki,
-            p=mrp_control.p,
-            integral_limit=mrp_control.integral_limit,
+            k=torch.tensor(mrp_control.k),
+            ki=torch.tensor(mrp_control.ki),
+            p=torch.tensor(mrp_control.p),
+            integral_limit=torch.tensor(mrp_control.integral_limit),
         )
 
     def forward(
@@ -77,6 +79,7 @@ class PointingGuide(Module[PointingGuideStateDict]):
         position_BN_N: torch.Tensor,
         attitude_BN: torch.Tensor,
         angular_velocity_BN_B: torch.Tensor,
+        reaction_wheels_speed: torch.Tensor,
         moment_of_inertia_matrix_wrt_body_point: torch.Tensor,
         moment_of_inertia_wrt_spin: torch.Tensor,
         spin_axis_in_body: torch.Tensor,
@@ -93,18 +96,18 @@ class PointingGuide(Module[PointingGuideStateDict]):
         )
         state_dict['_pointing_guide'] = pointing_guide_state_dict
 
-        reaction_wheels_state_dict = state_dict['_spacecraft'][
-            '_reaction_wheels']
         mrp_control_state_dict = state_dict['_mrp_control']
-        mrp_control_state_dict, attitude_control_torque = self._mrp_control(
+        mrp_control_state_dict, (
+            attitude_control_torque,
+            _,
+        ) = self._mrp_control(
             state_dict=mrp_control_state_dict,
             sigma_BR=pointing_guide_output.attitude_BR,
             omega_BR_B=pointing_guide_output.angular_velocity_BR_B,
             omega_RN_B=pointing_guide_output.angular_velocity_RN_B,
             domega_RN_B=torch.zeros_like(
                 pointing_guide_output.angular_velocity_BR_B),
-            wheel_speeds=reaction_wheels_state_dict['dynamic_params']
-            ['angular_velocity'],
+            wheel_speeds=reaction_wheels_speed,
             inertia_spacecraft_point_b_in_body=
             moment_of_inertia_matrix_wrt_body_point,
             reaction_wheels_inertia_wrt_spin=moment_of_inertia_wrt_spin,
@@ -130,6 +133,7 @@ class PowerSupply(Module[PowerSupplyStateDict]):
         use_battery: bool,
         **kwargs,
     ) -> None:
+        super().__init__(*args, **kwargs)
         self._use_battery = use_battery
         if not use_battery:
             self._battery = NoBattery()
@@ -205,6 +209,7 @@ class RemoteSensing(Module[RemoteSensingStateDict]):
         sensor: Sensor,
         **kwargs,
     ):
+        super().__init__(*args, **kwargs)
         self._ground_mapping = GroundMapping(
             timer=self._timer,
             minimum_elevation=torch.zeros(1),
