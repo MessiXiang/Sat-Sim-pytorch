@@ -11,5 +11,6 @@ pip install --no-build-isolation -e .
 
 ## Test
 ```
-pytest -vv .
+python -m algo.make_config
+python -m algo.run_sample_enviroment
 ```
