@@ -162,6 +162,7 @@ class LocationPointing(Module[LocationPointingStateDict]):
             attitude_BR_dot = 4 * attitude_BR_dot
             angular_velocity_BR_B = torch.einsum("...ij,...j->...i", binv,
                                                  attitude_BR_dot)
+        state_dict['attitude_BR_old'] = attitude_BR
 
         angular_velocity_RN_B = angular_velocity_BN_B - angular_velocity_BR_B
         angular_velocity_RN_N = torch.einsum(
@@ -170,7 +171,7 @@ class LocationPointing(Module[LocationPointingStateDict]):
             angular_velocity_RN_B,
         )
         return (
-            LocationPointingStateDict(attitude_BR_old=attitude_BR),
+            state_dict,
             LocationPointingOutput(
                 attitude_BR=attitude_BR,
                 angular_velocity_BR_B=angular_velocity_BR_B,
