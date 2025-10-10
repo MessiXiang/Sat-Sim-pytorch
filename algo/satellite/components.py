@@ -6,6 +6,7 @@ __all__ = [
     'PowerSupply',
     'RemoteSensingStateDict',
     'RemoteSensing',
+    'AutoRemoteSensing',
 ]
 from typing import TypedDict
 
@@ -263,5 +264,53 @@ class RemoteSensing(Module[RemoteSensingStateDict]):
         )
 
         is_filming = power_on & mapping_access_state.has_access
+
+        return state_dict, (is_filming, position_LN_N)
+
+
+class AutoRemoteSensing(RemoteSensing):
+
+    def forward(
+        self,
+        state_dict: RemoteSensingStateDict,
+        *args,
+        battery_state_dict: BatteryStateDict,
+        cross_env_invisible_mask: torch.Tensor,  # n_l, n_sc
+        earth_ephemeris: Ephemeris,
+        position_BN_N: torch.Tensor,
+        velocity_BN_N: torch.Tensor,
+        attitude_BN: torch.Tensor,
+        position_LP_P: torch.Tensor,
+        **kwargs,
+    ) -> tuple[RemoteSensingStateDict, tuple[torch.Tensor, torch.Tensor]]:
+        mapping_access_state: AccessState
+        ground_mapping_state_dict = state_dict['_ground_mapping']
+        ground_mapping_state_dict, (
+            mapping_access_state,
+            position_LN_N,
+            position_LP_N,
+        ) = self._ground_mapping(
+            ephemeris=earth_ephemeris,
+            position_BN_N=position_BN_N,  # [n_sc, 3]
+            velocity_BN_N=velocity_BN_N,
+            attitude_BN=attitude_BN,
+            position_LP_P=position_LP_P,  # [n_p, 3] - p stands for mapping point
+            equatorial_radius=constants.REQ_EARTH * 1e3,
+            polar_radius=constants.REQ_EARTH * 1e3,
+        )
+        visible_mask = cross_env_invisible_mask & mapping_access_state.has_access
+        sensor_on = visible_mask.any(dim=0)
+
+        power_sink_stat_dict = state_dict['_power_sink']
+        power_sink_stat_dict, (
+            power_on,
+            battery_state_dict,
+        ) = self._power_sink(
+            power_sink_stat_dict,
+            turn_on=sensor_on,
+            battery_state_dict=battery_state_dict,
+        )
+
+        is_filming = power_on & visible_mask
 
         return state_dict, (is_filming, position_LN_N)

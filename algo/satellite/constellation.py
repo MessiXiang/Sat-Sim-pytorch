@@ -1,6 +1,7 @@
 __all__ = [
     'RemoteSensingConstellationStateDict',
     'RemoteSensingConstellation',
+    'AgentCommandTorqueConstellation',
 ]
 from typing import TypedDict, cast
 
@@ -18,7 +19,8 @@ from satsim.simulation.spacecraft import (IntegrateMethod, Spacecraft,
                                           SpacecraftStateOutput)
 from satsim.utils import move_to
 
-from .components import (PointingGuide, PointingGuideStateDict, PowerSupply,
+from .components import (AutoRemoteSensing, PointingGuide,
+                         PointingGuideStateDict, PowerSupply,
                          PowerSupplyStateDict, RemoteSensing,
                          RemoteSensingStateDict)
 
@@ -39,11 +41,13 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
         constellation: Constellation,
         orbits: OrbitalElements | None = None,
         use_battery: bool = True,
+        position_LP_P: torch.Tensor,
         integrate_method: IntegrateMethod = 'RK',
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self._n = len(constellation.mass)
+        self._position_LP_P = position_LP_P
 
         self._setup_spacecraft(constellation, integrate_method, orbits=orbits)
         self._setup_power_supply(constellation, use_battery)
@@ -376,8 +380,97 @@ class RemoteSensingConstellation(Module[RemoteSensingConstellationStateDict]):
             battery_state_dict['stored_charge_percentage'],
         )
 
-    def setup_target(
+
+class AgentCommandTorqueConstellation(RemoteSensingConstellation):
+
+    def _setup_remote_sensing(self, constellation: Constellation) -> None:
+        self._remote_sensing = AutoRemoteSensing(
+            timer=self._timer,
+            sensor=constellation.sensor,
+        )
+
+    def _verify_sensing_acquisition(
         self,
+        state_dict: RemoteSensingConstellationStateDict,
+        cross_env_invisible_mask: torch.Tensor,
+        earth_ephemeris: Ephemeris,
+        position_BN_N: torch.Tensor,
+        velocity_BN_N: torch.Tensor,
+        attitude_BN: torch.Tensor,
         position_LP_P: torch.Tensor,
-    ) -> None:
-        self._position_LP_P = position_LP_P
+    ) -> tuple[RemoteSensingStateDict, torch.Tensor, torch.Tensor]:
+        remote_sensing_state_dict = state_dict['_remote_sensing']
+        battery_state_dict = state_dict['_power_supply']['_battery']
+        remote_sensing_state_dict, (
+            is_filming,
+            position_LN_N,
+        ) = self._remote_sensing(
+            remote_sensing_state_dict,
+            battery_state_dict=battery_state_dict,
+            cross_env_invisible_mask=cross_env_invisible_mask,
+            earth_ephemeris=earth_ephemeris,
+            position_BN_N=position_BN_N,
+            velocity_BN_N=velocity_BN_N,
+            attitude_BN=attitude_BN,
+            position_LP_P=position_LP_P,
+        )
+        return state_dict, is_filming, position_LN_N
+
+    def forward(
+        self,
+        state_dict: RemoteSensingConstellationStateDict,
+        *args,
+        cross_env_invisible_mask: torch.Tensor,
+        agent_commanded_torque: torch.Tensor,
+        **kwargs,
+    ) -> tuple[RemoteSensingConstellationStateDict, tuple]:
+        spacecraft_state_dict = state_dict['_spacecraft']
+
+        spacecraft_state_dict: SpacecraftStateDict
+        spacecraft_state_output: SpacecraftStateOutput
+        spacecraft_state_dict, spacecraft_state_output = self._spacecraft(
+            spacecraft_state_dict)
+        state_dict['_spacecraft'] = spacecraft_state_dict
+        attitude_BN = spacecraft_state_dict['_hub']['dynamic_params'][
+            'attitude_BN']
+        angular_velocity_BN_B = spacecraft_state_dict['_hub'][
+            'dynamic_params']['angular_velocity_BN_B']
+        battery_state_dict = state_dict['_power_supply']['_battery']
+
+        sun_ephemeris: Ephemeris
+        earth_ephemeris: Ephemeris
+        _, (sun_ephemeris, ) = self.spice_interface(names=['SUN'])
+        _, (earth_ephemeris, ) = self.spice_interface(names=['EARTH'])
+        sun_ephemeris = move_to(
+            sun_ephemeris,
+            attitude_BN,
+        )
+        earth_ephemeris = move_to(
+            earth_ephemeris,
+            attitude_BN,
+        )
+        state_dict, is_filming, position_LN_N = self._verify_sensing_acquisition(
+            state_dict,
+            cross_env_invisible_mask,
+            earth_ephemeris,
+            spacecraft_state_output.position_BN_N,
+            spacecraft_state_output.velocity_BN_N,
+            attitude_BN,
+            self._position_LP_P,
+        )
+
+        motor_torque = self._simple_motor_torque_assign(agent_commanded_torque)
+
+        state_dict = self._update_power_system(
+            state_dict,
+            motor_torque,
+            earth_ephemeris,
+            sun_ephemeris,
+            spacecraft_state_output.position_BN_N,
+        )
+
+        return state_dict, (
+            is_filming,
+            spacecraft_state_output,
+            battery_state_dict['stored_charge_percentage'],
+        )
