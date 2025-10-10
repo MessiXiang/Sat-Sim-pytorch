@@ -67,7 +67,7 @@ class InputNormalizer(nn.Module):
         return result
 
 
-def pick_and_normalize_dynamic_data(
+def pick_dynamic_data(
     constellation: RemoteSensingConstellation,
     state_dict: RemoteSensingConstellationStateDict,
 ):
@@ -84,13 +84,8 @@ def pick_and_normalize_dynamic_data(
         velocty_BP_N,
     ).unsqueeze(-1)
 
-    reaction_wheel_inertia = constellation.reaction_wheels.moment_of_inertia_wrt_spin
-    reaction_wheel_inertia = torch.diagonal(
-        reaction_wheel_inertia,
-        dim1=1,
-        dim2=2,
-    )
-
+    reaction_wheel_inertia = constellation.reaction_wheels.moment_of_inertia_wrt_spin.squeeze(
+        -2)
     # data dim is 13
     return torch.cat(
         [
