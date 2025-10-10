@@ -1,16 +1,17 @@
 __all__ = [
     'Task',
+    'Tasks',
     'TaskManager',
 ]
 
 import dataclasses
-import random
 import math
+import random
 from collections import UserList
 from typing import NamedTuple, Self, TypedDict, cast
 
-from numpy import pad
 import torch
+from numpy import pad
 
 from satsim.architecture import Timer, constants
 
@@ -89,29 +90,20 @@ class Task:
 
 class Tasks(UserList[Task]):
 
-    def unreleased_flags(self, current_time) -> torch.Tensor:
+    def is_released(self, current_time: float) -> torch.Tensor:
         return torch.tensor(
             [task.release_time < current_time for task in self])
 
-    def accessible_flags(self, current_time,
-                         succeeded_flags: torch.Tensor) -> torch.Tensor:
+    def is_accessible(
+        self,
+        current_time: float,
+    ) -> torch.Tensor:
         return torch.tensor([
-            task.release_time <= current_time < task.due_time and not finished
-            for task, finished in zip(self, succeeded_flags)
+            task.release_time <= current_time < task.due_time for task in self
         ])
 
-    def failed_flags(self, current_time,
-                     succeeded_flags: torch.Tensor) -> torch.Tensor:
-        return torch.tensor([
-            task.due_time <= current_time and not finished
-            for task, finished in zip(self, succeeded_flags)
-        ])
-
-    def closed_flags(self, current_time) -> torch.Tensor:
+    def is_closed(self, current_time) -> torch.Tensor:
         return torch.tensor([task.due_time <= current_time for task in self])
-
-    def _filter_tasks(self, flags: torch.Tensor) -> 'Tasks':
-        return Tasks(task for task, flag in zip(self, flags) if flag)
 
     def to_tensor(self) -> torch.Tensor:
         data = torch.tensor([task.data for task in self])
