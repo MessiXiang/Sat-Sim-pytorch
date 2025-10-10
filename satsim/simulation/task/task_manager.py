@@ -5,12 +5,22 @@ __all__ = [
 
 import dataclasses
 import random
+import math
 from collections import UserList
 from typing import NamedTuple, Self, TypedDict, cast
 
+from numpy import pad
 import torch
 
 from satsim.architecture import Timer, constants
+
+# 0--unreleased--)+[--ongoing--+--succeeded-)+[-succeeded --->
+#              release      complete        due
+#
+# 0--unreleased--)+[---------ongoing--------)+[--failed----->
+#              release                      due
+#
+# closed = succeed + failed
 
 
 class Coordinate(NamedTuple):
@@ -36,29 +46,19 @@ class Task:
     due_time: float
     duration: float
     coordinate: Coordinate
-    finished: bool
 
     @classmethod
     def from_dict(cls, config: TaskDict) -> Self:
-        return cls(
-            id_=config['id'],
-            release_time=config['release_time'],
-            due_time=config['due_time'],
-            duration=config['duration'],
-            coordinate=config['coordinate'],
-            finished=False,
-        )
+        return cls(id_=config['id'],
+                   release_time=config['release_time'],
+                   due_time=config['due_time'],
+                   duration=config['duration'],
+                   coordinate=config['coordinate'])
 
     def to_dict(self) -> TaskDict:
         d = dataclasses.asdict(self)
         d['id'] = d.pop('id_')
         return cast(TaskDict, d)
-
-    def is_accessible(self, current_time: float) -> bool:
-        return self.release_time <= current_time <= self.due_time and self.finished is False
-
-    def finish(self) -> None:
-        self.finished = True
 
     @property
     def data(self) -> list[float]:
@@ -80,23 +80,38 @@ class Task:
         due_time = random.randint(release_time + duration * 3,
                                   constants.MAX_TIME_STEP)
         return cls(
-            id_,
-            release_time,
-            due_time,
-            duration,
+            id_, release_time, due_time, duration,
             Coordinate(
-                random.uniform(-90, 90),
-                random.uniform(-180, 180),
-            ),
-            finished=False,
-        )
+                random.uniform(-math.pi / 2, math.pi / 2),
+                random.uniform(-math.pi, math.pi),
+            ))
 
 
 class Tasks(UserList[Task]):
 
-    def accessible_tasks(self, current_time) -> 'Tasks':
-        return Tasks(
-            [task for task in self if task.is_accessible(current_time)])
+    def unreleased_flags(self, current_time) -> torch.Tensor:
+        return torch.tensor(
+            [task.release_time < current_time for task in self])
+
+    def accessible_flags(self, current_time,
+                         succeeded_flags: torch.Tensor) -> torch.Tensor:
+        return torch.tensor([
+            task.release_time <= current_time < task.due_time and not finished
+            for task, finished in zip(self, succeeded_flags)
+        ])
+
+    def failed_flags(self, current_time,
+                     succeeded_flags: torch.Tensor) -> torch.Tensor:
+        return torch.tensor([
+            task.due_time <= current_time and not finished
+            for task, finished in zip(self, succeeded_flags)
+        ])
+
+    def closed_flags(self, current_time) -> torch.Tensor:
+        return torch.tensor([task.due_time <= current_time for task in self])
+
+    def _filter_tasks(self, flags: torch.Tensor) -> 'Tasks':
+        return Tasks(task for task, flag in zip(self, flags) if flag)
 
     def to_tensor(self) -> torch.Tensor:
         data = torch.tensor([task.data for task in self])
@@ -117,5 +132,161 @@ class Tasks(UserList[Task]):
 class TaskManager:
 
     def __init__(self, timer: Timer, tasks: list[Tasks]) -> None:
+        """
+        Manages tasks for multiple environments.
+        Assumes all environments have the same number of tasks.
+        """
         self._timer = timer
         self._tasks = tasks
+
+        self._flatten_tasks = [task for tasks in self._tasks for task in tasks]
+        self._durations = torch.tensor(
+            [task.duration for task in self._flatten_tasks])
+        self._num_tasks = [len(task) for task in tasks]
+        self._num_total_tasks = sum(self._num_tasks)
+
+        self._progress = torch.zeros(
+            self._num_total_tasks,
+            dtype=torch.uint32,
+        )
+        self._succeeded_tasks_flags = torch.zeros(
+            self._num_total_tasks,
+            dtype=torch.bool,
+        )
+
+    @property
+    def unreleased_tasks(self) -> list[Tasks]:
+        return [
+            tasks._filter_tasks(tasks.unreleased_flags(self._timer.time))
+            for tasks in self._tasks
+        ]
+
+    @property
+    def unreleased_tasks_flags(self) -> list[torch.Tensor]:
+        return [
+            tasks.unreleased_flags(self._timer.time) for tasks in self._tasks
+        ]
+
+    @property
+    def accessible_tasks(self) -> list[Tasks]:
+        splits = torch.split(self._succeeded_tasks_flags, self._num_tasks)
+        return [
+            tasks._filter_tasks(
+                tasks.accessible_flags(self._timer.time, splits[idx]))
+            for idx, tasks in enumerate(self._tasks)
+        ]
+
+    @property
+    def accessible_tasks_flags(self) -> list[torch.Tensor]:
+        splits = torch.split(self._succeeded_tasks_flags, self._num_tasks)
+        return [
+            tasks.accessible_flags(self._timer.time, splits[idx])
+            for idx, tasks in enumerate(self._tasks)
+        ]
+
+    @property
+    def succeeded_tasks(self) -> list[Tasks]:
+        splits = torch.split(self._succeeded_tasks_flags, self._num_tasks)
+        return [
+            tasks._filter_tasks(splits[idx])
+            for idx, tasks in enumerate(self._tasks)
+        ]
+
+    @property
+    def succeeded_tasks_flags(self) -> torch.Tensor:
+        return self._succeeded_tasks_flags
+
+    @property
+    def failed_tasks(self) -> list[Tasks]:
+        splits = torch.split(self._succeeded_tasks_flags, self._num_tasks)
+        return [
+            tasks._filter_tasks(
+                tasks.failed_flags(self._timer.time, splits[idx]))
+            for idx, tasks in enumerate(self._tasks)
+        ]
+
+    @property
+    def failed_tasks_flags(self) -> list[torch.Tensor]:
+        splits = torch.split(self._succeeded_tasks_flags, self._num_tasks)
+        return [
+            tasks.failed_flags(self._timer.time, splits[idx])
+            for idx, tasks in enumerate(self._tasks)
+        ]
+
+    @property
+    def closed_tasks(self) -> list[Tasks]:
+        return [
+            tasks._filter_tasks(tasks.closed_flags(self._timer.time))
+            for tasks in self._tasks
+        ]
+
+    @property
+    def closed_tasks_flags(self) -> list[torch.Tensor]:
+        return [tasks.closed_flags(self._timer.time) for tasks in self._tasks]
+
+    @property
+    def num_total_tasks(self) -> int:
+        return self._num_total_tasks
+
+    @property
+    def all_tasks(self) -> list[Tasks]:
+        return self._tasks
+
+    @property
+    def progress(self) -> torch.Tensor:
+        return self._progress
+
+    @property
+    def all_closed(self) -> torch.Tensor:
+        return torch.tensor([
+            len(closed) == num_tasks
+            for closed, num_tasks in zip(self.closed_tasks, self._num_tasks)
+        ])
+
+    @property
+    def is_idle(self) -> torch.Tensor:
+        return torch.tensor(
+            [len(accessibles) == 0 for accessibles in self.accessible_tasks])
+
+    @property
+    def num_all_tasks(self) -> int:
+        return self._num_total_tasks
+
+    @property
+    def num_accessible_tasks(self) -> list[int]:
+        return [len(accessible) for accessible in self.accessible_tasks]
+
+    @property
+    def num_succeeded_tasks(self) -> list[int]:
+        splits = torch.split(self._succeeded_tasks_flags, self._num_tasks)
+        return [int(split.sum().item()) for split in splits]
+
+    def step(self, is_visible: torch.Tensor) -> None:
+        """
+        is_visible: (num_total_tasks, num_total_spacecrafts) for all tasks and all spacecrafts in all environments.
+                    True if the task is visible by assigned spacecraft.
+        """
+        is_visible = is_visible.any(1)  # (num_total_tasks,)
+        flatten_accessible_flag = torch.cat(self.accessible_tasks_flags)
+
+        is_visible = is_visible & flatten_accessible_flag
+        self._progress = self._progress + is_visible.int()
+
+        succeeded_mask = self._progress >= self._durations
+        self._succeeded_tasks_flags |= succeeded_mask
+
+    def padding(self, flags: list[torch.Tensor],
+                max_num_tasks: int) -> torch.Tensor:
+        """
+        flags: (num_total_tasks,) True for real tasks, False for padding
+
+        return: (num_envs, max_num_tasks)
+        """
+        padded_flags = []
+        for flag in flags:
+            padding_flag = torch.zeros(max_num_tasks - flag.shape[0],
+                                       dtype=torch.bool,
+                                       device=flag.device)
+            flag = torch.cat([flag, padding_flag], dim=0)
+            padded_flags.append(flag)
+        return torch.stack(padded_flags)

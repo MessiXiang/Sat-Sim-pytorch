@@ -180,8 +180,8 @@ class GroundMapping(Module[GroundMappingStateDict]):
         position_BL_N_unit = position_BL_N / position_BL_N_norm  # [n_p, n_sc, 3]
         sin_view_angle = torch.einsum(
             '...i, ...ji -> ...j',
-            position_BL_N_unit,
             position_LP_N_unit,
+            position_BL_N_unit,
         )
         view_angle = torch.asin(torch.clamp(
             sin_view_angle,
@@ -240,7 +240,6 @@ class GroundMapping(Module[GroundMappingStateDict]):
             position_BP_N,
             direction_cosine_matrix_NB,
         )
-
         has_access = (view_angle > self.minimum_elevation) & within_view
         return state_dict, (
             AccessState(
