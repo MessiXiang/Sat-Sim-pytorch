@@ -240,7 +240,6 @@ class GroundMapping(Module[GroundMappingStateDict]):
             position_BP_N,
             direction_cosine_matrix_NB,
         )
-
         has_access = (view_angle > self.minimum_elevation) & within_view
         return state_dict, (
             AccessState(
