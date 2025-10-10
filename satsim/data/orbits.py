@@ -13,6 +13,8 @@ from typing import Any, Iterable, TypedDict, cast
 import torch
 from typing_extensions import Self
 
+from .constellations import normalize_uniform_distribution
+
 eps = 1e-15
 
 
@@ -65,6 +67,36 @@ class OrbitalElement:
             round(random.uniform(0, 2) * torch.pi, 1),
         )
 
+    @property
+    def normalized_static_data(self) -> torch.Tensor:
+        return torch.tensor([
+            normalize_uniform_distribution(
+                self.semi_major_axis,
+                6.8,
+                8e6,
+            ),
+            normalize_uniform_distribution(
+                self.eccentricity,
+                1,
+                0.005,
+            ),
+            normalize_uniform_distribution(
+                self.inclination,
+                0,
+                torch.pi,
+            ),
+            normalize_uniform_distribution(
+                self.right_ascension_of_the_ascending_node,
+                0,
+                2 * torch.pi,
+            ),
+            normalize_uniform_distribution(
+                self.argument_of_perigee,
+                0,
+                2 * torch.pi,
+            ),
+        ])
+
 
 class OrbitalElements(UserList[OrbitalElement]):
 
@@ -82,6 +114,49 @@ class OrbitalElements(UserList[OrbitalElement]):
     def to_tensor(self) -> torch.Tensor:
         data = torch.tensor([element.data for element in self])
         return data
+
+    @property
+    def normalized_static_data(self) -> torch.Tensor:
+        data = self.to_tensor()
+        (
+            semi_major_axis,
+            eccentricity,
+            inclination,
+            right_ascension_of_the_ascending_node,
+            argument_of_perigee,
+            _,
+        ) = data.unbind(dim=-1)
+        normalized_data = torch.stack(
+            [
+                normalize_uniform_distribution(
+                    semi_major_axis,
+                    6.8,
+                    8e6,
+                ),
+                normalize_uniform_distribution(
+                    eccentricity,
+                    1,
+                    0.005,
+                ),
+                normalize_uniform_distribution(
+                    inclination,
+                    0,
+                    torch.pi,
+                ),
+                normalize_uniform_distribution(
+                    right_ascension_of_the_ascending_node,
+                    0,
+                    2 * torch.pi,
+                ),
+                normalize_uniform_distribution(
+                    argument_of_perigee,
+                    0,
+                    2 * torch.pi,
+                ),
+            ],
+            dim=-1,
+        )
+        return normalized_data
 
 
 def elem2rv(

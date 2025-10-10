@@ -41,8 +41,11 @@ def sample_direction(n: int) -> list[Direction]:
     return directions
 
 
-def normalize_uniform_distribution(sample: torch.Tensor, low: float,
-                                   high: float):
+def normalize_uniform_distribution(
+    sample: torch.Tensor | float,
+    low: float,
+    high: float,
+):
     sigma = (high - low) / (2 * math.sqrt(3))
     mean = (high + low) / 2
     return (sample - mean) / sigma
