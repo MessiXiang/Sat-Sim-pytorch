@@ -14,11 +14,11 @@ import torch
 
 from satsim.architecture import Timer, constants
 
-# 0--unreleased--)+[--ongoing--+--succeeded-)+[-succeeded --->
-#              release      complete        due
+# 0--unreleased--)+[--accessible--+--succeeded-)+[-succeeded --->
+#              release         complete        due
 #
-# 0--unreleased--)+[---------ongoing--------)+[--failed----->
-#              release                      due
+# 0--unreleased--)+[---------accessible--------)+[--failed----->
+#              release                         due
 #
 # closed = succeed + failed
 
@@ -91,7 +91,7 @@ class Tasks(UserList[Task]):
 
     def unreleased_flags(self, current_time) -> torch.Tensor:
         return torch.tensor(
-            [task.release_time < current_time for task in self])
+            [current_time < task.release_time for task in self])
 
     def accessible_flags(self, current_time,
                          succeeded_flags: torch.Tensor) -> torch.Tensor:
@@ -131,13 +131,14 @@ class Tasks(UserList[Task]):
 
 class TaskManager:
 
-    def __init__(self, timer: Timer, tasks: list[Tasks]) -> None:
+    def __init__(self, timer: Timer, tasks: list[Tasks],
+                 nums_spacecrafts: int) -> None:
         """
         Manages tasks for multiple environments.
-        Assumes all environments have the same number of tasks.
         """
         self._timer = timer
         self._tasks = tasks
+        self._num_spacecrafts = nums_spacecrafts
 
         self._flatten_tasks = [task for tasks in self._tasks for task in tasks]
         self._durations = torch.tensor(
@@ -261,17 +262,29 @@ class TaskManager:
         splits = torch.split(self._succeeded_tasks_flags, self._num_tasks)
         return [int(split.sum().item()) for split in splits]
 
-    def step(self, is_visible: torch.Tensor) -> None:
+    def step(self, is_filming: torch.Tensor, actions: torch.Tensor) -> None:
         """
-        is_visible: (num_total_tasks, num_total_spacecrafts) for all tasks and all spacecrafts in all environments.
-                    True if the task is visible by assigned spacecraft.
+        is_filming: (num_total_tasks, num_total_spacecrafts) for all tasks and all spacecrafts in all environments.
+            True if the point is filming by the spacecraft.
+            NOTE: Every spacecraft must be assigned to a pointting target, position_LP_P=0 for do nothing.
+        actions: (num_total_spacecrafts,)  -2 for do nothing, -1 for charging, >=0 for filming task_id.        
         """
-        is_visible = is_visible.any(1)  # (num_total_tasks,)
+        filming_mask = actions >= 0
+        filming_task_ids = actions[filming_mask]
+        filming_sat_indices = torch.nonzero(filming_mask).squeeze(dim=1)
+
+        if filming_task_ids.numel() == 0:
+            return
+
+        is_visible = torch.zeros_like(self._succeeded_tasks_flags,
+                                      dtype=torch.bool)
+        task_visibility = is_filming[filming_task_ids, filming_sat_indices]
+        is_visible.scatter_(dim=0, index=filming_task_ids, src=task_visibility, reduce='or')
+
         flatten_accessible_flag = torch.cat(self.accessible_tasks_flags)
-
         is_visible = is_visible & flatten_accessible_flag
-        self._progress = self._progress + is_visible.int()
 
+        self._progress = self._progress + is_visible.int()
         succeeded_mask = self._progress >= self._durations
         self._succeeded_tasks_flags |= succeeded_mask
 
