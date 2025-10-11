@@ -1,5 +1,6 @@
 __all__ = [
     'Task',
+    'Tasks',
     'TaskManager',
 ]
 
@@ -9,7 +10,6 @@ import math
 from collections import UserList
 from typing import NamedTuple, Self, TypedDict, cast
 
-from numpy import pad
 import torch
 
 from satsim.architecture import Timer, constants
@@ -132,19 +132,27 @@ class Tasks(UserList[Task]):
 class TaskManager:
 
     def __init__(self, timer: Timer, tasks: list[Tasks],
-                 nums_spacecrafts: int) -> None:
+                 num_satellites: list[int]) -> None:
         """
         Manages tasks for multiple environments.
+        :param tasks: list of Tasks for each environment.
+        :param num_satellites: list of number of satellites for each environment.
         """
         self._timer = timer
         self._tasks = tasks
-        self._num_spacecrafts = nums_spacecrafts
+        self.num_satellites = num_satellites
 
         self._flatten_tasks = [task for tasks in self._tasks for task in tasks]
         self._durations = torch.tensor(
             [task.duration for task in self._flatten_tasks])
         self._num_tasks = [len(task) for task in tasks]
         self._num_total_tasks = sum(self._num_tasks)
+
+        num_tasks_offset = [0]
+        for i in range(1, len(self._num_tasks)):
+            num_tasks_offset.append(num_tasks_offset[-1] +
+                                    self._num_tasks[i - 1])
+        self._num_tasks_offset = num_tasks_offset
 
         self._progress = torch.zeros(
             self._num_total_tasks,
@@ -264,13 +272,24 @@ class TaskManager:
 
     def step(self, is_filming: torch.Tensor, actions: torch.Tensor) -> None:
         """
-        is_filming: (num_total_tasks, num_total_spacecrafts) for all tasks and all spacecrafts in all environments.
-            True if the point is filming by the spacecraft.
-            NOTE: Every spacecraft must be assigned to a pointting target, position_LP_P=0 for do nothing.
-        actions: (num_total_spacecrafts,)  -2 for do nothing, -1 for charging, >=0 for filming task_id.        
+        :param is_filming: (num_total_tasks, num_total_satellites) for all tasks and all satellites in all environments.
+            True if the point is filming by the satellite.
+            NOTE: Each satellite must be assigned to a pointting target, position_LP_P=0 for do nothing.
+        :param actions: (num_total_satellites,)  -2 for do nothing, -1 for charging, >=0 for filming task_id, max=max_num_tasks.
         """
-        filming_mask = actions >= 0
-        filming_task_ids = actions[filming_mask]
+        env_indices = torch.cat([
+            torch.full((num_sats, ), idx, device=actions.device)
+            for idx, num_sats in enumerate(self.num_satellites)
+        ])
+
+        task_ids = actions.clone()
+        filming_mask = task_ids >= 0
+        filming_task_ids = task_ids[filming_mask]
+        env_offsets = torch.tensor(
+            self._num_tasks_offset,
+            device=actions.device)[env_indices[filming_mask]]
+        filming_task_ids += env_offsets  # (num_filming_tasks,) in global task ids
+
         filming_sat_indices = torch.nonzero(filming_mask).squeeze(dim=1)
 
         if filming_task_ids.numel() == 0:
@@ -279,7 +298,10 @@ class TaskManager:
         is_visible = torch.zeros_like(self._succeeded_tasks_flags,
                                       dtype=torch.bool)
         task_visibility = is_filming[filming_task_ids, filming_sat_indices]
-        is_visible.scatter_(dim=0, index=filming_task_ids, src=task_visibility, reduce='or')
+        is_visible.scatter_(dim=0,
+                            index=filming_task_ids,
+                            src=task_visibility,
+                            reduce='or')
 
         flatten_accessible_flag = torch.cat(self.accessible_tasks_flags)
         is_visible = is_visible & flatten_accessible_flag
