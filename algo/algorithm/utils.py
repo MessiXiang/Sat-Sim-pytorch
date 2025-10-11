@@ -1,11 +1,40 @@
 import torch
+import torch.nn.functional as F
 from torch import nn
+from torch.distributions import Normal
 
 from satsim.architecture import constants
 from satsim.data import calculate_true_anomaly
 
 from ..satellite import (RemoteSensingConstellation,
                          RemoteSensingConstellationStateDict)
+
+
+def continuous_actions_sample(mean: torch.Tensor, std: torch.Tensor):
+    normal = Normal(mean, std)
+    actions = normal.rsample()
+    return actions
+
+
+def discrete_actions_sample(
+    logits: torch.Tensor,
+    tau=1.0,
+    hard=False,
+    eps=1e-10,
+):
+    u = torch.rand_like(logits)
+    gumbel_noise = -torch.log(-torch.log(u + eps) + eps)
+    y = logits + gumbel_noise
+    y = y / tau
+
+    y_soft = F.softmax(y, dim=-1)
+
+    if hard:
+        _, indices = y_soft.max(dim=-1)
+        y_hard = F.one_hot(indices, num_classes=logits.shape[-1]).float()
+        return (y_hard - y_soft).detach() + y_soft
+    else:
+        return y_soft
 
 
 class InputNormalizer(nn.Module):
