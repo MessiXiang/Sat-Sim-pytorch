@@ -1,7 +1,7 @@
 import einops
 import torch
 from todd.models.losses import MSELoss
-from todd.models.modules.transformer import Block
+from todd.models.modules.transformer import Block, mlp
 from todd.patches.torch import Sequential
 from torch import nn
 
@@ -9,6 +9,7 @@ from .enviroment.enviroment import Observation
 
 TASK_DIM = 6
 SATELLITE_DIM = 35
+MAX_TORQUE = 0.2
 
 
 class Encoder(nn.Module):
@@ -265,8 +266,8 @@ class GRUDecoder(nn.Module):
             b=batch_size,
             ns=ns,
         )
-
-        return output
+        actions = torch.tanh(output) * MAX_TORQUE
+        return actions
 
 
 class Model(nn.Module):
@@ -274,7 +275,6 @@ class Model(nn.Module):
     def __init__(
         self,
         *args,
-        time_step: int,
         tasks_data_embedding_dim: int = 128,
         encoder_width: int = 512,
         encoder_depth: int = 12,
@@ -296,13 +296,8 @@ class Model(nn.Module):
             decoder_depth=decoder_depth,
             decoder_num_heads=decoder_num_heads,
         )
-        self._actions_decoder = GRUDecoder(
-            hidden_dim=decoder_width,
-            time_step=time_step,
-            output_dim=3,
-        )
 
-    def predict(self, observation: Observation) -> torch.Tensor:
+    def forward(self, observation: Observation) -> torch.Tensor:
         batch_size, decoder_seq_len, _ = observation.constellation_data.shape
         constellation_mask = torch.zeros(
             batch_size,
@@ -318,5 +313,55 @@ class Model(nn.Module):
             tasks_data=observation.tasks_data,
             tasks_mask=observation.tasks_visibility,
         )
-        actions = self._actions_decoder(logits)
-        return actions
+        return logits
+
+
+class Actor(Model):
+
+    def __init__(
+        self,
+        *args,
+        decoder_width: int = 512,
+        time_step: int,
+        **kwargs,
+    ) -> None:
+        super().__init__(*args, decoder_width=decoder_width, **kwargs)
+        self._actions_decoder = GRUDecoder(
+            hidden_dim=decoder_width,
+            time_step=time_step,
+            output_dim=3,
+        )
+
+    def forward(
+        self,
+        *args,
+        **kwargs,
+    ) -> torch.Tensor:
+        logits = super().forward(*args, **kwargs)
+        return self._actions_decoder(logits)
+
+
+class Critic(Model):
+
+    def __init__(
+        self,
+        *args,
+        decoder_width: int = 512,
+        time_step: int,
+        **kwargs,
+    ) -> None:
+        super().__init__(*args, decoder_width=decoder_width, **kwargs)
+        self._mlp = nn.Sequential(
+            nn.Linear(decoder_width, 4 * decoder_width),
+            nn.GELU(),
+            nn.Linear(4 * decoder_width, 1),
+        )
+
+    def forward(
+        self,
+        *args,
+        **kwargs,
+    ) -> torch.Tensor:
+        logits = super().forward(*args, **kwargs)
+        logits = einops.rearrange(logits, 'b ns d -> b (ns d)')
+        return self._mlp(logits)
