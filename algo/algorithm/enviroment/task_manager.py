@@ -1,3 +1,5 @@
+from typing import Iterable
+
 import torch
 
 from satsim.architecture import Timer
@@ -9,35 +11,32 @@ class TaskManager:
     def __init__(
         self,
         timer: Timer,
-        tasks: list[Tasks],
-        num_satellites: list[int],
+        tasks: Iterable[Tasks],
+        num_satellites: Iterable[int],
     ) -> None:
         """
         Manages tasks for multiple environments.
         Assumes all environments have the same number of tasks.
         """
         self._timer = timer
-        self._tasks = tasks
+        self._tasks = tuple(tasks)
 
         self._flatten_tasks = Tasks(
             [task for tasks in self._tasks for task in tasks])
 
-        self._progress = torch.zeros(
-            self.num_total_tasks,
-            dtype=torch.uint32,
-        )
-        self._num_satellites = num_satellites
+        self._progress = torch.zeros(self.num_total_tasks, )
+        self._num_satellites = tuple(num_satellites)
 
     @property
     def tasks(self) -> Tasks:
         return self._flatten_tasks
 
     @property
-    def num_tasks(self) -> list[int]:
-        return [len(tasks) for tasks in self._tasks]
+    def num_tasks(self) -> tuple[int, ...]:
+        return tuple(len(tasks) for tasks in self._tasks)
 
     @property
-    def num_satellites(self) -> list[int]:
+    def num_satellites(self) -> tuple[int, ...]:
         return self._num_satellites
 
     @property
@@ -100,10 +99,19 @@ class TaskManager:
         is_visible = is_visible & self.cross_env_invisible_mask
         is_visible = is_visible.any(1)  # (num_total_tasks,)
         accessible_mask = self.tasks.is_accessible(self._timer.time)
-        closed_mask = self.tasks.is_closed(self._timer.time)
         success_mask = self.has_completed
 
-        valid_task_progress = is_visible & accessible_mask & ~closed_mask & ~success_mask
+        valid_task_progress = is_visible & accessible_mask & ~success_mask
 
         self._progress = self._progress + valid_task_progress.int(
         ) * self._timer.dt
+
+    def get_task_progress_data(self) -> torch.Tensor:
+        _, due_time, duration, *coordinate = self.tasks.to_tensor().unbind(
+            dim=-1)
+        time_left = due_time - self._timer.time
+        progress_left = torch.clamp(duration - self.progress, min=0.)
+        task_progress_data = torch.stack(
+            [*coordinate, time_left, progress_left, due_time, duration],
+            dim=-1)
+        return task_progress_data
