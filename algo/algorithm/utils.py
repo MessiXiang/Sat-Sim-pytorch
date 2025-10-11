@@ -84,6 +84,11 @@ def pick_dynamic_data(
         velocty_BP_N,
     ).unsqueeze(-1)
 
+    battery_state_dict = state_dict['_power_supply']['_battery']
+    percentage = battery_state_dict['stored_charge_percentage']
+    capacity = battery_state_dict['storage_capacity']
+    charge = (percentage * capacity).unsqueeze(-1)
+
     reaction_wheel_inertia = constellation.reaction_wheels.moment_of_inertia_wrt_spin.squeeze(
         -2)
     # data dim is 13
@@ -94,6 +99,7 @@ def pick_dynamic_data(
             attitude,
             true_anomaly,
             reaction_wheel_inertia,
+            charge,
         ],
         dim=-1,
     )
