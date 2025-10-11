@@ -76,6 +76,9 @@ def pick_dynamic_data(
     hub_dynam = state_dict['_spacecraft']['_hub']['dynamic_params']
     angular_velocity = hub_dynam['angular_velocity_BN_B'].clone().detach()
     attitude = hub_dynam['attitude_BN'].clone().detach()
+    if attitude.dim() == 1:
+        attitude = attitude.expand_as(angular_velocity)
+
     position_BP_N = hub_dynam['position_BP_N'].clone().detach()
     velocty_BP_N = hub_dynam['velocity_BP_N'].clone().detach()
     true_anomaly = calculate_true_anomaly(
@@ -89,16 +92,13 @@ def pick_dynamic_data(
     capacity = battery_state_dict['storage_capacity']
     charge = (percentage * capacity).unsqueeze(-1)
 
-    reaction_wheel_inertia = constellation.reaction_wheels.moment_of_inertia_wrt_spin.squeeze(
-        -2)
-    # data dim is 13
+    # data dim is 12
     return torch.cat(
         [
             reaction_wheels_speed,
             angular_velocity,
             attitude,
             true_anomaly,
-            reaction_wheel_inertia,
             charge,
         ],
         dim=-1,
