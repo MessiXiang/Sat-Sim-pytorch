@@ -208,6 +208,8 @@ class Enviroment:
     def step(
         self,
         actions: TorqueAction,
-    ) -> tuple[Observation, torch.Tensor, torch.Tensor]:
-
+    ) -> tuple[Observation, torch.Tensor]:
         self._take_actions(actions)
+        observation = self._get_observation()
+        reward = self._get_reward()
+        return observation, reward
