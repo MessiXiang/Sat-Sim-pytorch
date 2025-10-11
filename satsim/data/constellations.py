@@ -476,7 +476,6 @@ class Constellation:
         ).unsqueeze(-1)
 
         inertia = torch.tensor([[i[0], i[4], i[8]] for i in self.inertia])
-        inertia = torch.tensor(inertia)
         normalized_inertia = normalize_uniform_distribution(
             inertia,
             50,

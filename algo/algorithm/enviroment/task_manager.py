@@ -1,3 +1,6 @@
+__all__ = [
+    'TaskManager',
+]
 from typing import Iterable
 
 import torch
@@ -91,7 +94,7 @@ class TaskManager:
             for i, task in enumerate(self.tasks)
         ])
 
-    def step(self, is_visible: torch.Tensor) -> None:
+    def step(self, is_visible: torch.Tensor) -> torch.Tensor:
         """
         is_visible: (num_total_tasks, num_total_spacecrafts) for all tasks and all spacecrafts in all environments.
                     True if the task is visible by assigned spacecraft.
@@ -110,6 +113,8 @@ class TaskManager:
             self._progress,
             max=duration,
         )
+
+        return valid_task_progress
 
     def get_task_progress_data(self) -> torch.Tensor:
         _, due_time, duration, *coordinate = self.tasks.to_tensor().unbind(
