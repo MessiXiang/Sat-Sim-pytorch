@@ -51,4 +51,4 @@ class SimplePowerSink(Module[SimplePowerSinkStateDict], PowerNodeMixin):
         power_status, battery = self.update_power_status(
             power_efficiency, battery_state_dict)
 
-        return state_dict, (power_status, battery)
+        return state_dict, (power_status & turn_on, battery)
