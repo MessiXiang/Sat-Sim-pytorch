@@ -6,6 +6,7 @@ __all__ = [
 from typing import TypedDict, cast
 
 import torch
+import torch.nn.functional as F
 
 from satsim.architecture import Module, constants
 from satsim.data import (Constellation, OrbitalElements, ReactionWheelGroups,
@@ -17,7 +18,7 @@ from satsim.simulation.reaction_wheels import (HoneywellHR12Small,
 from satsim.simulation.spacecraft import (IntegrateMethod, Spacecraft,
                                           SpacecraftStateDict,
                                           SpacecraftStateOutput)
-from satsim.utils import move_to
+from satsim.utils import move_to, mrp_to_rotation_matrix
 
 from .components import (AutoRemoteSensing, PointingGuide,
                          PointingGuideStateDict, PowerSupply,
@@ -423,7 +424,14 @@ class AgentCommandTorqueConstellation(RemoteSensingConstellation):
         cross_env_invisible_mask: torch.Tensor,
         agent_commanded_torque: torch.Tensor,
         **kwargs,
-    ) -> tuple[RemoteSensingConstellationStateDict, tuple]:
+    ) -> tuple[
+            RemoteSensingConstellationStateDict,
+            tuple[
+                torch.Tensor,
+                torch.Tensor,
+                torch.Tensor,
+            ],
+    ]:
         spacecraft_state_dict = state_dict['_spacecraft']
 
         spacecraft_state_dict: SpacecraftStateDict
@@ -469,8 +477,29 @@ class AgentCommandTorqueConstellation(RemoteSensingConstellation):
             spacecraft_state_output.position_BN_N,
         )
 
+        # principle rotation angle to point pHat at location
+        position_LB_N = (position_LN_N.unsqueeze(1) -
+                         spacecraft_state_output.position_BN_N.unsqueeze(0)
+                         )  # np, ns, 3
+
+        direction_cosine_matrix_BN = mrp_to_rotation_matrix(
+            attitude_BN)  # ns, 3, 3
+        position_LB_B = torch.einsum(
+            "...jk,...k->...j",
+            direction_cosine_matrix_BN,
+            position_LB_N,
+        )  # np, ns, 3
+        position_LB_B_unit = F.normalize(position_LB_B, dim=-1)  # np, ns, 3
+
+        dum1 = torch.einsum(
+            '...i, ...i -> ...',
+            self._pointing_guide._location_poiniting.pointing_direction_B_B,
+            position_LB_B_unit,
+        )  # np, ns
+        dum1 = torch.clamp(dum1, -1.0, 1.0)  # np, ns
+        angle_error = torch.acos(dum1)  # np, ns
+
         return state_dict, (
             is_filming,
-            spacecraft_state_output,
-            battery_state_dict['stored_charge_percentage'],
+            angle_error,
         )
