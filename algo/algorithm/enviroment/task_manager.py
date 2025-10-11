@@ -105,6 +105,11 @@ class TaskManager:
 
         self._progress = self._progress + valid_task_progress.int(
         ) * self._timer.dt
+        duration = torch.tensor([task.duration for task in self.tasks])
+        self._progress = torch.clamp(
+            self._progress,
+            max=duration,
+        )
 
     def get_task_progress_data(self) -> torch.Tensor:
         _, due_time, duration, *coordinate = self.tasks.to_tensor().unbind(
