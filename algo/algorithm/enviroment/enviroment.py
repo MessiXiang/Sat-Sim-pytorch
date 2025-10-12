@@ -68,9 +68,7 @@ class Enviroment:
         use_battery: bool,
         batch_size: int,
         integrate_method: IntegrateMethod = 'RK',
-        simulation_step: int = 5,
     ) -> None:
-        self._simulation_step = simulation_step
         self._use_battery = use_battery
         self._batch_size = batch_size
         self._integrate_method = integrate_method
