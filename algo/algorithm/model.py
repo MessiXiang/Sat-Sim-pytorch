@@ -1,11 +1,13 @@
+from typing import Optional
+
 import einops
 import torch
-from todd.models.losses import MSELoss
-from todd.models.modules.transformer import Block, mlp
+from todd.models.modules.transformer import Block
 from todd.patches.torch import Sequential
 from torch import nn
 
-from .enviroment.enviroment import Observation
+from .enviroment.enviroment import Observation, TorqueAction
+from .utils import continuous_actions_sample
 
 TASK_DIM = 6
 SATELLITE_DIM = 35
@@ -173,11 +175,9 @@ class Transformer(nn.Module):
     def __init__(
         self,
         *args,
-        tasks_data_embedding_dim: int,
         encoder_width: int,
         encoder_depth: int,
         encoder_num_heads: int,
-        constellation_data_embedding_dim: int,
         decoder_width: int,
         decoder_depth: int,
         decoder_num_heads: int,
@@ -186,13 +186,11 @@ class Transformer(nn.Module):
         super().__init__(*args, **kwargs)
 
         self._encoder = Encoder(
-            data_dim=tasks_data_embedding_dim,
             width=encoder_width,
             depth=encoder_depth,
             num_heads=encoder_num_heads,
         )
         self._decoder = Decoder(
-            data_dim=constellation_data_embedding_dim,
             width=decoder_width,
             depth=decoder_depth,
             num_heads=decoder_num_heads,
@@ -227,11 +225,13 @@ class GRUDecoder(nn.Module):
         hidden_dim: int,
         time_step: int,
         output_dim: int,
+        deterministic: bool,
     ):
         super(GRUDecoder, self).__init__()
         self._hidden_dim = hidden_dim
         self._time_step = time_step
         self._output_dim = output_dim
+        self._deterministic = deterministic
 
         self._gru = nn.GRU(
             input_size=hidden_dim,
@@ -240,9 +240,22 @@ class GRUDecoder(nn.Module):
         )
         self._h0 = nn.Parameter(torch.randn(1, 1, hidden_dim))
 
-        self._projection = nn.Linear(hidden_dim, output_dim)
+        self._mu_projection = nn.Sequential(
+            nn.Linear(hidden_dim, 4 * hidden_dim),
+            nn.GELU(),
+            nn.Linear(4 * hidden_dim, output_dim),
+        )
+        if not self._deterministic:
+            self._sigma_projection = nn.Sequential(
+                nn.Linear(hidden_dim, 4 * hidden_dim),
+                nn.GELU(),
+                nn.Linear(4 * hidden_dim, output_dim),
+            )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+    ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
         batch_size, ns, _ = x.shape
         x = einops.rearrange(x, 'b ns d -> (b ns) 1 d')
 
@@ -258,16 +271,25 @@ class GRUDecoder(nn.Module):
             ts=self._time_step,
         )
         x, _ = self._gru(x, h0)
-        x = self._projection(x)
+        mu = self._mu_projection(x)
 
-        output = einops.rearrange(
-            x,
+        mu = einops.rearrange(
+            mu,
             '(b ns) ts nd -> b ns ts nd',
             b=batch_size,
             ns=ns,
         )
-        actions = torch.tanh(output) * MAX_TORQUE
-        return actions
+        if self._deterministic:
+            return mu
+
+        sigma = self._sigma_projection(x)
+        sigma = einops.rearrange(
+            sigma,
+            '(b ns) ts nd -> b ns ts nd',
+            b=batch_size,
+            ns=ns,
+        )
+        return mu, sigma
 
 
 class Model(nn.Module):
@@ -275,11 +297,9 @@ class Model(nn.Module):
     def __init__(
         self,
         *args,
-        tasks_data_embedding_dim: int = 128,
         encoder_width: int = 512,
         encoder_depth: int = 12,
         encoder_num_heads: int = 16,
-        constellation_data_embedding_dim: int = 128,
         decoder_width: int = 512,
         decoder_depth: int = 12,
         decoder_num_heads: int = 16,
@@ -287,11 +307,9 @@ class Model(nn.Module):
     ) -> None:
         super().__init__(*args, **kwargs)
         self._transformer = Transformer(
-            tasks_data_embedding_dim=tasks_data_embedding_dim,
             encoder_width=encoder_width,
             encoder_depth=encoder_depth,
             encoder_num_heads=encoder_num_heads,
-            constellation_data_embedding_dim=constellation_data_embedding_dim,
             decoder_width=decoder_width,
             decoder_depth=decoder_depth,
             decoder_num_heads=decoder_num_heads,
@@ -323,6 +341,7 @@ class Actor(Model):
         *args,
         decoder_width: int = 512,
         time_step: int,
+        deterministic: bool = False,
         **kwargs,
     ) -> None:
         super().__init__(*args, decoder_width=decoder_width, **kwargs)
@@ -330,15 +349,23 @@ class Actor(Model):
             hidden_dim=decoder_width,
             time_step=time_step,
             output_dim=3,
+            deterministic=deterministic,
         )
+        self._deterministic = deterministic
 
     def forward(
         self,
         *args,
         **kwargs,
-    ) -> torch.Tensor:
+    ) -> TorqueAction:
         logits = super().forward(*args, **kwargs)
-        return self._actions_decoder(logits)
+        actions_prob = self._actions_decoder(logits)
+        if self._deterministic:
+            return actions_prob.unbind(dim=-2)
+
+        mu, sigma = actions_prob
+        actions = continuous_actions_sample(mu, sigma)
+        return actions
 
 
 class Critic(Model):
@@ -347,7 +374,6 @@ class Critic(Model):
         self,
         *args,
         decoder_width: int = 512,
-        time_step: int,
         **kwargs,
     ) -> None:
         super().__init__(*args, decoder_width=decoder_width, **kwargs)
@@ -357,11 +383,27 @@ class Critic(Model):
             nn.Linear(4 * decoder_width, 1),
         )
 
-    def forward(
-        self,
-        *args,
-        **kwargs,
-    ) -> torch.Tensor:
-        logits = super().forward(*args, **kwargs)
-        logits = einops.rearrange(logits, 'b ns d -> b (ns d)')
-        return self._mlp(logits)
+    def forward(self, observation: Observation) -> torch.Tensor:
+        batch_size, decoder_seq_len, _ = observation.constellation_data.shape
+        constellation_mask = torch.zeros(
+            batch_size,
+            decoder_seq_len,
+            dtype=torch.bool,
+        )
+        for batch_idx, num_satellite in enumerate(observation.num_satellites):
+            constellation_mask[batch_idx, :num_satellite] = True
+
+        logits: torch.Tensor = self._transformer(
+            constellation_data=observation.constellation_data,
+            constellation_mask=constellation_mask,
+            tasks_data=observation.tasks_data,
+            tasks_mask=observation.tasks_visibility,
+        )
+
+        constellation_mask = constellation_mask.unsqueeze(-1)
+        sum_logits = (constellation_mask * logits).sum(dim=1)
+
+        sum_count = constellation_mask.int().sum(dim=1)
+        mean_state = sum_logits / (sum_count + 1e-8)
+
+        return self._mlp(mean_state)
