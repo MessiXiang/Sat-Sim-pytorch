@@ -13,7 +13,7 @@ def LLA2PCPF(
     longitude: Tensor,
     altitude: Tensor,
     equatorial_radius: float,
-    polar_radius: float,
+    polar_radius: float = None,
 ) -> Tensor:
     """
     Convert from latitude, longitude, altitude to planet-centered, planet-fixed coordinates.
