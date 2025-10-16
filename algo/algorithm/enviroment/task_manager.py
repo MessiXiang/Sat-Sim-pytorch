@@ -31,6 +31,10 @@ class TaskManager:
         self._num_satellites = tuple(num_satellites)
 
     @property
+    def tasks_per_env(self) -> tuple[Tasks, ...]:
+        return self._tasks
+
+    @property
     def tasks(self) -> Tasks:
         return self._flatten_tasks
 
@@ -104,7 +108,8 @@ class TaskManager:
         accessible_mask = self.tasks.is_accessible(self._timer.time)
         success_mask = self.has_completed
 
-        valid_task_progress = is_visible & accessible_mask & ~success_mask
+        valid_task_progress = is_visible & accessible_mask.unsqueeze(
+            -1) & ~success_mask.unsqueeze(dim=-1)
 
         self._progress = self._progress + valid_task_progress.int(
         ) * self._timer.dt

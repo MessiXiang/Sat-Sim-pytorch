@@ -364,7 +364,7 @@ class Actor(Model):
             return actions_prob.unbind(dim=-2)
 
         mu, sigma = actions_prob
-        actions = continuous_actions_sample(mu, sigma)
+        actions = continuous_actions_sample(mu, sigma).unbind(dim=-2)
         return actions
 
 
@@ -406,4 +406,30 @@ class Critic(Model):
         sum_count = constellation_mask.int().sum(dim=1)
         mean_state = sum_logits / (sum_count + 1e-8)
 
-        return self._mlp(mean_state)
+        return self._mlp(mean_state).squeeze(-1)  # [b]
+
+
+class AttitudeControlMLP(nn.Module):
+
+    def __init__(self, input_dim, hidden_dim) -> None:
+        super().__init__()
+        self._input_projection = nn.Linear(input_dim, hidden_dim)
+        self._mlp = nn.Sequential(
+            nn.Linear(hidden_dim, 4 * hidden_dim),
+            nn.GELU(),
+            nn.Linear(4 * hidden_dim, 4 * hidden_dim),
+            nn.GELU(),
+            nn.Linear(4 * hidden_dim, 3),
+        )
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        return_logits: bool = False
+    ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
+        x = self._input_projection(x)
+        x = self._mlp(x)
+        torque = torch.tanh(x) * MAX_TORQUE
+        if return_logits:
+            return x, torque
+        return torque
