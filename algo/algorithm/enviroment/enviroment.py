@@ -21,28 +21,6 @@ MAX_TASKS_NUM = 312
 MAX_SATELLITE_NUM = 64
 
 
-def padding(v: torch.Tensor, split: Iterable[int],
-            pad_len: int) -> torch.Tensor:
-    split = tuple(split)
-    batch_size = len(split)
-    padding = torch.zeros(batch_size, pad_len, v.size(-1))
-    split_v = torch.split(v, split)
-
-    for i in range(batch_size):
-        padding[i, :split[i], :] = split_v[i]
-
-    return padding
-
-
-def unpadding(v: torch.Tensor, split: Iterable[int]) -> torch.Tensor:
-    split = tuple(split)
-    pickup = []
-    for i in range(v.size(0)):
-        valid = v[i, :split[i], :]
-        pickup.append(valid)
-    return torch.cat(pickup, dim=0)
-
-
 class Observation(NamedTuple):
     num_tasks: tuple[int, ...]
     num_satellites: tuple[int, ...]
