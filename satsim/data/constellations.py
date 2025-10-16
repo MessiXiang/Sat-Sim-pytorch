@@ -468,6 +468,22 @@ class Constellation:
         )
 
     @property
+    def normalized_mass_property(self) -> torch.Tensor:
+        normalized_mass = normalize_uniform_distribution(
+            torch.tensor(self.mass),
+            50,
+            200,
+        ).unsqueeze(-1)
+
+        inertia = torch.tensor([[i[0], i[4], i[8]] for i in self.inertia])
+        normalized_inertia = normalize_uniform_distribution(
+            inertia,
+            50,
+            200,
+        )
+        return torch.cat([normalized_mass, normalized_inertia], dim=-1)
+
+    @property
     def normalized_static_data(self) -> torch.Tensor:
         normalized_mass = normalize_uniform_distribution(
             torch.tensor(self.mass),
