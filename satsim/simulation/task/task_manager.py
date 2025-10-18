@@ -2,6 +2,9 @@ __all__ = [
     'Task',
     'Tasks',
     'TaskManager',
+    'TaskDicts',
+    'TaskDict',
+    'Coordinate',
 ]
 
 import dataclasses
