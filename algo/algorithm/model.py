@@ -419,17 +419,29 @@ class AttitudeControlMLP(nn.Module):
             nn.GELU(),
             nn.Linear(4 * hidden_dim, 4 * hidden_dim),
             nn.GELU(),
-            nn.Linear(4 * hidden_dim, 3),
+            nn.Linear(4 * hidden_dim, hidden_dim),
         )
+        self._mu_projector = nn.Linear(hidden_dim, 3)
+        self._log_sigma_projector = nn.Linear(hidden_dim, 3)
 
     def forward(
         self,
         x: torch.Tensor,
-        return_logits: bool = False
+        deterministic: bool = False,
+        return_logits: bool = False,
     ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
         x = self._input_projection(x)
         x = self._mlp(x)
-        torque = torch.tanh(x) * MAX_TORQUE
+        mu = self._mu_projector(x)
+        if deterministic:
+            torque = torch.tanh(mu) * MAX_TORQUE
+        else:
+            log_sigma = self._log_sigma_projector(x)
+            sigma = torch.exp(torch.clamp(log_sigma, -20, 2))
+            torque, self.epsilon = continuous_actions_sample(
+                mu, sigma, return_epsilon=True)
+            torque = torch.tanh(torque) * MAX_TORQUE
+
         if return_logits:
             return x, torque
         return torque
