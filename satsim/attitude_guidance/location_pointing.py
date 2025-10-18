@@ -6,11 +6,35 @@ __all__ = [
 
 from typing import NamedTuple, NotRequired, TypedDict
 
+import einops
 import torch
 import torch.nn.functional as F
+from torch.autograd import Function
 
 from satsim.architecture import Module, constants
 from satsim.utils import add_mrp, mrp_to_rotation_matrix
+
+
+class SafeAcos(Function):
+
+    def forward(
+        ctx,
+        input: torch.Tensor,
+        grad_dump: torch.Tensor,
+    ) -> torch.Tensor:
+        ctx.save_for_backward(input, grad_dump)
+        return torch.acos(input)
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor) -> torch.Tensor:
+        (input, grad_dump) = ctx.saved_tensors
+        grad_input = -1.0 / torch.sqrt(1 - input**2) * grad_output
+        grad_input = torch.where(
+            grad_dump,
+            0.,
+            grad_input,
+        )
+        return grad_input, None
 
 
 class LocationPointingStateDict(TypedDict):
@@ -127,23 +151,35 @@ class LocationPointing(Module[LocationPointingStateDict]):
         dum1 = torch.clamp(dum1, -1.0, 1.0)
         angle_error = torch.acos(dum1)
 
+        non_parallel_mask = angle_error > constants.PARALLEL_TOLERANCE
+        safe_angle_error = SafeAcos.apply(dum1, ~non_parallel_mask)
+
         # calculate sigma_BR
         attitude_BR = torch.zeros_like(attitude_BN)  # [b, ..., 3]
-        non_parallel_mask = angle_error > constants.PARALLEL_TOLERANCE
 
         if torch.any(non_parallel_mask):
             near_180_mask = (torch.pi -
-                             angle_error) < constants.PARALLEL_TOLERANCE
+                             safe_angle_error) < constants.PARALLEL_TOLERANCE
+
+            cross_product = torch.cross(
+                self.pointing_direction_B_B,
+                position_LB_B_unit,
+                dim=-1,
+            )
+            safe_cross_product = torch.where(
+                (non_parallel_mask & ~near_180_mask).unsqueeze(-1),  # [b, ...]
+                cross_product,
+                torch.zeros_like(position_LB_B_unit),
+            )
             rotation_axis = torch.where(
                 near_180_mask.unsqueeze(-1),  # [b, ..., 1]
                 self.aux_perp_vector_180_B_B,
-                torch.cross(self.pointing_direction_B_B,
-                            position_LB_B_unit,
-                            dim=-1))
+                safe_cross_product,
+            )
             rotation_axis = F.normalize(rotation_axis, dim=-1)
             attitude_BR = torch.where(
                 non_parallel_mask.unsqueeze(-1),  # [b, ..., 1]
-                -torch.tan(angle_error.unsqueeze(-1) / 4) * rotation_axis,
+                -torch.tan(safe_angle_error.unsqueeze(-1) / 4) * rotation_axis,
                 attitude_BR,
             )
 
@@ -183,29 +219,20 @@ class LocationPointing(Module[LocationPointingStateDict]):
 
 
 def _binv_mrp(q: torch.Tensor) -> torch.Tensor:
-    s2 = torch.sum(q**2, dim=-1, keepdim=True)
+    s2 = torch.sum(q**2, dim=-1)
 
-    q0 = q[..., 0:1]
-    q1 = q[..., 1:2]
-    q2 = q[..., 2:3]
+    q0, q1, q2 = q.unbind(-1)
 
-    batch_size = q.shape[:-1]
-    binv = torch.zeros(*batch_size, 3, 3, device=q.device, dtype=q.dtype)
-
-    # Compute each element of the matrix using MRP B inverse formula
-    binv[..., 0, 0] = (1 - s2 + 2 * q0**2).squeeze(-1)
-    binv[..., 0, 1] = (2 * (q0 * q1 + q2)).squeeze(-1)
-    binv[..., 0, 2] = (2 * (q0 * q2 - q1)).squeeze(-1)
-
-    binv[..., 1, 0] = (2 * (q1 * q0 - q2)).squeeze(-1)
-    binv[..., 1, 1] = (1 - s2 + 2 * q1**2).squeeze(-1)
-    binv[..., 1, 2] = (2 * (q1 * q2 + q0)).squeeze(-1)
-
-    binv[..., 2, 0] = (2 * (q2 * q0 + q1)).squeeze(-1)
-    binv[..., 2, 1] = (2 * (q2 * q1 - q0)).squeeze(-1)
-    binv[..., 2, 2] = (1 - s2 + 2 * q2**2).squeeze(-1)
+    row0 = torch.stack(
+        [1 - s2 + 2 * q0**2, 2 * (q0 * q1 + q2), 2 * (q0 * q2 - q1)], dim=-1)
+    row1 = torch.stack(
+        [2 * (q1 * q0 - q2), 1 - s2 + 2 * q1**2, 2 * (q1 * q2 + q0)], dim=-1)
+    row2 = torch.stack(
+        [2 * (q2 * q0 + q1), 2 * (q2 * q1 - q0), 1 - s2 + 2 * q2**2], dim=-1)
+    binv = torch.stack([row0, row1, row2], dim=-2)
 
     scale = 1.0 / ((1 + s2)**2)
-    binv = binv * scale.squeeze(-1).unsqueeze(-1).unsqueeze(-1)
+    scale = einops.repeat(scale, '... -> ... 3 3')
+    binv = binv * scale
 
     return binv
