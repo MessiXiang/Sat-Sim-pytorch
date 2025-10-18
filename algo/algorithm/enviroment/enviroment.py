@@ -52,6 +52,10 @@ class Enviroment:
         self._integrate_method = integrate_method
         self._timer = Timer(1.)
 
+    @property
+    def task_manager(self) -> TaskManager:
+        return self._task_manager
+
     def _stochastic_init(self) -> None:
         num_satellite_per_env = torch.randint(
             5,
@@ -107,15 +111,7 @@ class Enviroment:
             [static_data, dynamic_data],
             dim=-1,
         )
-        satellites_data = padding(
-            satellites_data,
-            self._task_manager.num_satellites,
-            pad_len=MAX_SATELLITE_NUM,
-        )
-
         tasks_data = self._task_manager.get_task_progress_data()
-        tasks_data = padding(tasks_data, self._task_manager.num_tasks,
-                             MAX_TASKS_NUM)
         tasks_visibility = ~self._task_manager.has_completed & self._task_manager.tasks.is_accessible(
             self._timer.time)
 
@@ -129,21 +125,47 @@ class Enviroment:
 
     def _get_reward(self) -> torch.Tensor:
         # task_reward is a contact and step function which lead to a non-differentiable nature.
-        task_reward = self._task_manager.progress.sum()
+        tasks_progress_per_env = torch.cat([
+            progress.sum() for progress in torch.split(
+                self._task_manager.progress,
+                self._task_manager.num_tasks,
+            )
+        ])
+        tasks_durations_per_env = torch.tensor([
+            sum([task.duration for task in tasks])
+            for tasks in self._task_manager.tasks_per_env
+        ])
+        task_reward_per_env = tasks_progress_per_env / (
+            tasks_durations_per_env + 1e-8)
 
         battery_state_dict = self._simulator_state_dict['_power_supply'][
             '_battery']
-        battery_reward = battery_state_dict['stored_charge_percentage']
+        battery_charge_percentage = battery_state_dict[
+            'stored_charge_percentage']
+        battery_reward_per_env = torch.cat([
+            percentage.mean() for percentage in torch.split(
+                battery_charge_percentage,
+                self._task_manager.num_satellites,
+            )
+        ])
 
         # use angle_error as a auxiliary reward for model to learn when task_reward is wherever zero
         angle_error = self._action_result_buffer['angle_error']
         valid_progress_mask = self._action_result_buffer[
             'valid_task_progress_mask']
-        valid_angle_error = torch.where(valid_progress_mask, angle_error, 0.)
-        valid_angle_error = torch.max(valid_angle_error, dim=0)[0]
-        auxiliary_angle_error_reward = -valid_angle_error.sum() * 0.1
+        valid_angle_error = torch.where(valid_progress_mask, angle_error,
+                                        2 * torch.pi)
+        valid_angle_error = torch.min(valid_angle_error, dim=0)[0]
+        auxiliary_angle_error_reward_per_env = torch.cat([
+            angle_error.mean() for angle_error in torch.split(
+                valid_angle_error,
+                self._task_manager.num_satellites,
+            )
+        ])
 
-        return task_reward + battery_reward + auxiliary_angle_error_reward
+        auxiliary_angle_error_reward_per_env = -auxiliary_angle_error_reward_per_env * 0.1
+
+        return task_reward_per_env + battery_reward_per_env + auxiliary_angle_error_reward_per_env
 
     def _take_actions(self, actions: TorqueAction) -> None:
         """Use actions (torque per satellite) to update simulator state and task progress.
@@ -152,8 +174,6 @@ class Enviroment:
 
         """
         for action in actions:
-
-            action = unpadding(action, self._task_manager.num_satellites)
 
             self._simulator_state_dict, (
                 is_visible,

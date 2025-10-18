@@ -10,9 +10,16 @@ from ..satellite import (RemoteSensingConstellation,
                          RemoteSensingConstellationStateDict)
 
 
-def continuous_actions_sample(mean: torch.Tensor, std: torch.Tensor):
+def continuous_actions_sample(
+    mean: torch.Tensor,
+    std: torch.Tensor,
+    return_epsilon: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor] | torch.Tensor:
     normal = Normal(mean, std)
     actions = normal.rsample()
+    if return_epsilon:
+        epsilon = (actions - mean) / (std + 1e-8)
+        return actions, epsilon
     return actions
 
 
@@ -25,7 +32,7 @@ def discrete_actions_sample(
     u = torch.rand_like(logits)
     gumbel_noise = -torch.log(-torch.log(u + eps) + eps)
     y = logits + gumbel_noise
-    y = y / tau
+    y = y / (tau + eps)
 
     y_soft = F.softmax(y, dim=-1)
 
@@ -97,9 +104,7 @@ class InputNormalizer(nn.Module):
 
 
 def pick_dynamic_data(
-    constellation: RemoteSensingConstellation,
-    state_dict: RemoteSensingConstellationStateDict,
-):
+        state_dict: RemoteSensingConstellationStateDict) -> torch.Tensor:
     reaction_wheels_speed = state_dict['_spacecraft']['_reaction_wheels'][
         'dynamic_params']['angular_velocity'].clone().detach().squeeze(-2)
     hub_dynam = state_dict['_spacecraft']['_hub']['dynamic_params']

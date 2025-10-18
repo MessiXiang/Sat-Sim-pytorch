@@ -16,12 +16,10 @@ from satsim.simulation.gravity import Ephemeris
 from satsim.simulation.power import SimpleBattery
 from satsim.simulation.spacecraft import (SpacecraftStateDict,
                                           SpacecraftStateOutput)
-from satsim.simulation.task import Tasks
+from satsim.simulation.task import TaskDicts, Tasks
 from satsim.utils import LLA2PCPF, move_to, mrp_to_rotation_matrix
 
-from ....satsim.simulation.task.task_manager import TaskDicts
-
-DATA_DIM = 35
+DATA_DIM = 29
 
 
 class AttitudeControlConstellationStateDict(TypedDict):
@@ -49,17 +47,21 @@ class AttitudeControlConstellation(
             'RK',
             orbits,
         )
-        self._position_LP_P = position_LP_P
+        self.register_buffer('_position_LP_P', position_LP_P, persistent=False)
         self._battery = SimpleBattery(
             timer=self._timer,
             storage_capacity=torch.full([self._n], 20000),
-            stored_charge_percentage_init=torch.rand(self._n) * 0.3 + 0.5,
+            stored_charge_percentage_init=torch.full([self._n], 0.8),
         )
         self._location_pointing = LocationPointing(
             timer=self._timer,
             pointing_direction_B_B=torch.tensor(
                 constellation.sensor.direction),
         )
+
+    @property
+    def position_LP_P(self) -> torch.Tensor:
+        return self.get_buffer('_position_LP_P')
 
     def _calculate_location_inertial_position(
         self,
@@ -193,87 +195,57 @@ class AttitudeControlEnviroment:
         self._timer.reset()
         self._simulator_state_dict = self._simulator.reset()
 
-        _, (
-            earth_ephemeris,
-        ) = self._simulator._spacecraft.gravity_field.spice_interface('EARTH')
-        earth_ephemeris = move_to(
-            earth_ephemeris,
-            self._simulator_state_dict['_spacecraft']['_hub']['dynamic_params']
-            ['attitude_BN'],
+        return torch.cat(
+            [self._get_observation(),
+             torch.zeros(self._num_envs, 6)],
+            dim=-1,
         )
-        return self._get_observation(earth_ephemeris)
 
     def _pick_dynamic_data(self) -> torch.Tensor:
         reaction_wheels_speed = self._simulator_state_dict['_spacecraft'][
             '_reaction_wheels']['dynamic_params']['angular_velocity'].clone(
-            ).detach().squeeze(-2)
+            ).squeeze(-2)
         hub_dynam = self._simulator_state_dict['_spacecraft']['_hub'][
             'dynamic_params']
-        angular_velocity = hub_dynam['angular_velocity_BN_B'].clone().detach()
-        attitude = hub_dynam['attitude_BN'].clone().detach()
+        angular_velocity = hub_dynam['angular_velocity_BN_B'].clone()
+        attitude = hub_dynam['attitude_BN'].clone()
         if attitude.dim() == 1:
             attitude = attitude.expand_as(angular_velocity)
 
-        position_BP_N = hub_dynam['position_BP_N'].clone().detach()
-        velocty_BP_N = hub_dynam['velocity_BP_N'].clone().detach()
-        true_anomaly = calculate_true_anomaly(
-            constants.MU_EARTH * 1e9,
-            position_BP_N,
-            velocty_BP_N,
-        ).unsqueeze(-1)
-
         battery_state_dict = self._simulator_state_dict['_battery']
         percentage = battery_state_dict['stored_charge_percentage'].clone(
-        ).detach().unsqueeze(-1)
+        ).unsqueeze(-1)
 
-        # b, 11
+        # b, 10
         return torch.cat(
             [
                 reaction_wheels_speed,
                 angular_velocity,
                 attitude,
-                true_anomaly,
                 percentage,
             ],
             dim=-1,
         )
 
     def _pick_static_data(self) -> torch.Tensor:
-        sensor_direction = torch.tensor(
-            self._constellations_data.sensor.direction)
         reaction_wheel_data = self._constellations_data.reaction_wheels.normalized_static_data
         mass_property = self._constellations_data.normalized_mass_property
 
         # b, 13
         return torch.cat(
             [
-                sensor_direction,
+                self._simulator.reaction_wheels.moment_of_inertia_wrt_spin.
+                squeeze(-2),
                 reaction_wheel_data,
                 mass_property,
-                self._latitude.unsqueeze(-1),
-                self._longitude.unsqueeze(-1),
             ],
             dim=-1,
         )
 
-    def _get_observation(self, earth_ephemeris: torch.Tensor) -> torch.Tensor:
-        next_direction_cosine_matrix_PN = earth_ephemeris[
-            'direction_cosine_matrix_CN'] + earth_ephemeris[
-                'direction_cosine_matrix_CN_dot']
-        next_direction_cosine_matrix_PN = einops.rearrange(
-            next_direction_cosine_matrix_PN, 'i j k -> i (j k)')
-        next_direction_cosine_matrix_PN = einops.repeat(
-            next_direction_cosine_matrix_PN,
-            'i j -> (i num_envs) j',
-            num_envs=self._num_envs,
-        )
-
+    def _get_observation(self) -> torch.Tensor:
         observation = torch.cat(
-            [
-                next_direction_cosine_matrix_PN,
-                self._pick_dynamic_data(),
-                self._pick_static_data()
-            ],
+            [self._pick_dynamic_data(),
+             self._pick_static_data()],
             dim=-1,
         )
         return observation
@@ -294,13 +266,60 @@ class AttitudeControlEnviroment:
             torque=actions,
         )
         self._timer.step()
-        earth_ephemeris = move_to(earth_ephemeris, angle_error)
-        observation = self._get_observation(earth_ephemeris)
+        observation = self._get_observation()
+        observation = torch.cat(
+            [
+                observation, attitude_info.attitude_BR,
+                attitude_info.angular_velocity_BR_B
+            ],
+            dim=-1,
+        )
 
         battery_percentage = self._simulator_state_dict['_battery'][
             'stored_charge_percentage']
-        loss = angle_error + 0.1 * (1 - battery_percentage)
+        battery_loss = 0.1 * (1 - battery_percentage).sum() / self._num_envs
+
+        attitude_loss = torch.nn.functional.mse_loss(
+            attitude_info.attitude_BR,
+            torch.zeros_like(attitude_info.attitude_BR),
+        ) + torch.nn.functional.mse_loss(
+            attitude_info.angular_velocity_BR_B,
+            torch.zeros_like(attitude_info.angular_velocity_BR_B),
+        )
+
+        loss = attitude_loss + battery_loss
         return observation, loss
+
+    @torch.no_grad()
+    def test_step(
+        self,
+        actions: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        state_dict: AttitudeControlConstellationStateDict
+        attitude_info: LocationPointingOutput
+        earth_ephemeris: Ephemeris
+        self._simulator_state_dict, (
+            angle_error,
+            attitude_info,
+            earth_ephemeris,
+        ) = self._simulator(
+            self._simulator_state_dict,
+            torque=actions,
+        )
+        self._timer.step()
+        observation = self._get_observation()
+        observation = torch.cat(
+            [
+                observation, attitude_info.attitude_BR,
+                attitude_info.angular_velocity_BR_B
+            ],
+            dim=-1,
+        )
+
+        battery_percentage = self._simulator_state_dict['_battery'][
+            'stored_charge_percentage']
+
+        return observation, angle_error, battery_percentage
 
     def state_dict(
         self
@@ -342,3 +361,6 @@ class AttitudeControlEnviroment:
             orbits=orbits,
             position_LP_P=position_LP_P)
         self._simulator_state_dict = simulator_state_dict
+
+    def to(self, device: torch.device) -> None:
+        self._simulator.to(device)

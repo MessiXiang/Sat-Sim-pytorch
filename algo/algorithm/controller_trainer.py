@@ -6,10 +6,13 @@ from typing import Iterable
 import torch
 from matplotlib import pyplot as plt
 from todd.configs import PyConfig
+from todd.loggers import master_logger
 from todd.patches.py_ import json_dump, json_load
 from torch.optim import Adam
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
+
+from satsim.attitude_control import MRPFeedback, MRPFeedbackStateDict
 
 from .enviroment.attitude_control import DATA_DIM, AttitudeControlEnviroment
 from .model import AttitudeControlMLP
@@ -34,6 +37,7 @@ class ControllerTrainer:
         )
         self._input_transform = InputNormalizer(DATA_DIM)
         self._gamma = config.train.gamma
+        self._is_generalized = config.train.get('generalized', False)
 
         self._tensorboard_dir = os.path.join(
             config.train.log_dir,
@@ -90,11 +94,18 @@ class ControllerTrainer:
 
         self._checkpoints_save_time += 1
 
-    def train(self, is_generalized: bool = False) -> None:
+    def train(
+        self,
+        resume_from: str | None = None,
+    ) -> None:
         self._checkpoints_save_time = 0
         tensorboard = SummaryWriter(self._tensorboard_dir)
 
-        observation = self._env.reset(True)
+        if resume_from is not None:
+            self.load_checkpoints(resume_from)
+            observation = self._env.reset()
+        else:
+            observation = self._env.reset(True)
         for episode_idx in range(self._episode_num):
 
             runtime_input_transform = deepcopy(self._input_transform)
@@ -111,9 +122,9 @@ class ControllerTrainer:
                 observation = runtime_input_transform(observation)
 
             epoch_losses = torch.stack(
-                epoch_losses).sum() / self._episode_length / self._num_envs
+                epoch_losses).sum() / self._episode_length
             print(
-                f"Episode: {episode_idx}/ {self._episode_num} Average Angle_error: {epoch_losses}"
+                f"Episode: {episode_idx}/ {self._episode_num} Average loss: {epoch_losses}"
             )
             tensorboard.add_scalar(
                 "Train/Loss",
@@ -123,11 +134,25 @@ class ControllerTrainer:
 
             self._adam.zero_grad()
             epoch_losses.backward()
-            self._adam.step()
+            for param in self._model.parameters():  # ugly fix for nan grad
+                if torch.isnan(param.grad).any():
+                    self._adam.zero_grad()
+                    self.save_checkpoints()
+                    master_logger.warning(
+                        f"NaN gradient detected at episode {episode_idx}, skipping parameter update and do saving checkpoints at {self._checkpoints_save_time-1} instead."
+                    )
+                    break
+
+            else:
+                self._adam.step()
+
             if episode_idx % 50 == 0:
                 self.save_checkpoints()
                 self.test()
-            observation = self._env.reset(is_generalized)
+            observation = self._env.reset(self._is_generalized)
+        self.save_checkpoints()
+        self.test()
+
         tensorboard.close()
 
     @torch.no_grad()
@@ -135,13 +160,17 @@ class ControllerTrainer:
         observation = self._env.reset()
         observation = self._input_transform(observation)
         angle_errors = []
+        battery_percentages = []
         for episode_step in range(self._episode_length):
-            actions = self._model(observation)
-            observation, loss = self._env.step(actions)
+            actions = self._model(observation, deterministic=True)
+            observation, angle_error, battery_percentage = self._env.test_step(
+                actions)
             observation = self._input_transform(observation)
-            angle_errors.append(loss)
+            angle_errors.append(angle_error)
+            battery_percentages.append(battery_percentage)
 
         angle_errors = torch.stack(angle_errors, dim=-1).tolist()
+        battery_percentages = torch.stack(battery_percentages, dim=-1).tolist()
 
         plt.clf()
         for angle_error in angle_errors:
@@ -154,3 +183,17 @@ class ControllerTrainer:
         plt.savefig(
             os.path.join(self._log_dir, 'test',
                          f'angle_error_{self._checkpoints_save_time}.png'))
+
+        plt.clf()
+        for battery_percentage in battery_percentages:
+            plt.plot(battery_percentage)
+        plt.xlabel('Timestep')
+        plt.ylabel('Battery Percentage (%)')
+        plt.title('Battery Percentage over Time')
+        plt.savefig(
+            os.path.join(
+                self._log_dir, 'test',
+                f'battery_percentage_{self._checkpoints_save_time}.png'))
+
+    def to_device(self, device: torch.device) -> None:
+        self._model.to(device)

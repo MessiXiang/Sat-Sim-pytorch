@@ -27,7 +27,9 @@ def train_controller(rank, world_size, config):
 if __name__ == '__main__':
     torch.manual_seed(42)
     random.seed(42)
-    torch.set_default_device(1)
-    config = PyConfig.load('algo/configs/attitude_control_config.py')
+    torch.set_default_device(0)
+    config = PyConfig.load('algo/configs/test.py')
     trainer = ControllerTrainer(config)
-    trainer.train(resume_from='runs/test_run_2/checkpoints/checkpoints_1')
+    trainer.load_checkpoints('runs/test_run_3/checkpoints/checkpoints_3')
+    trainer._checkpoints_save_time = 0
+    trainer.test()
